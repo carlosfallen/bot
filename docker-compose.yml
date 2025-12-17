@@ -1,0 +1,77 @@
+# FILE: docker-compose.yml
+# Império Lorde - WhatsApp Bot NLP
+# Stack: Bun + SolidJS + Baileys + SQLite
+
+version: '3.8'
+
+services:
+  # Aplicação principal (Bun + Baileys + SolidJS)
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: imperio-app
+    restart: always
+    ports:
+      - "${APP_PORT:-3210}:3210"
+    volumes:
+      - ./data:/app/data
+      - ./sessions:/app/sessions
+      - ./logs:/app/logs
+    environment:
+      - TZ=America/Fortaleza
+      - NODE_ENV=production
+      - DB_PATH=/app/data/imperio.db
+      - SESSION_DIR=/app/sessions
+      - PORT=3210
+      - WORK_HOURS_START=${WORK_HOURS_START:-08:00}
+      - WORK_HOURS_END=${WORK_HOURS_END:-18:00}
+      - WORK_DAYS=${WORK_DAYS:-1,2,3,4,5}
+      - ADMIN_NUMBER=${ADMIN_NUMBER}
+      - APP_NAME=Imperio Lorde
+    networks:
+      - imperio-network
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3210/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    labels:
+      - "app.name=imperio-lorde"
+      - "app.component=main"
+
+  # Nginx Reverse Proxy
+  nginx:
+    image: nginx:alpine
+    container_name: imperio-nginx
+    restart: always
+    ports:
+      - "${HTTP_PORT:-80}:80"
+      - "${HTTPS_PORT:-443}:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      - ./nginx/ssl:/etc/nginx/ssl:ro
+      - ./logs/nginx:/var/log/nginx
+    depends_on:
+      app:
+        condition: service_healthy
+    networks:
+      - imperio-network
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    labels:
+      - "app.name=imperio-lorde"
+      - "app.component=proxy"
+
+networks:
+  imperio-network:
+    driver: bridge
+
+volumes:
+  imperio-data:
+  imperio-sessions:

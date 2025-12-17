@@ -1,11 +1,9 @@
 // FILE: src/server/db.ts
+// Database usando bun:sqlite (nativo do Bun)
 
-import Database from 'better-sqlite3';
-import { drizzle } from 'drizzle-orm/better-sqlite3';
-import { sql } from 'drizzle-orm';
+import { Database } from 'bun:sqlite';
 
-const db = new Database(process.env.DB_PATH || './data/imperio.db');
-const drizzleDb = drizzle(db);
+const db = new Database(process.env.DB_PATH || './data/imperio.db', { create: true });
 
 export async function initDatabase() {
   db.exec(`
@@ -19,6 +17,7 @@ export async function initDatabase() {
       objetivo TEXT,
       orcamento TEXT,
       prazo TEXT,
+      qualification TEXT DEFAULT 'frio',
       status TEXT DEFAULT 'novo',
       origem TEXT DEFAULT 'whatsapp',
       created_at INTEGER DEFAULT (strftime('%s', 'now')),
@@ -32,12 +31,14 @@ export async function initDatabase() {
       message TEXT NOT NULL,
       intent TEXT,
       confidence REAL,
+      sentiment TEXT,
       created_at INTEGER DEFAULT (strftime('%s', 'now'))
     );
 
     CREATE TABLE IF NOT EXISTS sessions (
       phone TEXT PRIMARY KEY,
       state TEXT DEFAULT 'initial',
+      qualification TEXT DEFAULT 'frio',
       context TEXT DEFAULT '{}',
       last_interaction INTEGER DEFAULT (strftime('%s', 'now'))
     );
@@ -62,21 +63,21 @@ export async function initDatabase() {
   `);
 
   // Inserir templates padrão
-  const hasTemplates = db.prepare('SELECT COUNT(*) as count FROM message_templates').get() as { count: number };
-  
+  const hasTemplates = db.query('SELECT COUNT(*) as count FROM message_templates').get() as { count: number };
+
   if (hasTemplates.count === 0) {
-    insertDefaultTemplates(db);
+    insertDefaultTemplates();
   }
 }
 
-function insertDefaultTemplates(db: Database.Database) {
+function insertDefaultTemplates() {
   const templates = [
     {
       intent: 'saudacao',
       variations: JSON.stringify([
-        'Oi {nome}! Tudo bem? 👋',
-        'Olá {nome}! Como vai? 😊',
-        'E aí {nome}! Tudo certo? 🙂'
+        'Oi! Tudo bem? 👋',
+        'Olá! Como vai? 😊',
+        'E aí! Tudo certo? 🙂'
       ]),
       requires_data: null,
       priority: 10
@@ -168,6 +169,16 @@ function insertDefaultTemplates(db: Database.Database) {
       ]),
       requires_data: null,
       priority: 1
+    },
+    {
+      intent: 'handoff',
+      variations: JSON.stringify([
+        'Entendi! Vou transferir você para um atendente humano. Aguarde um momento! 👤',
+        'Sem problemas! Já vou te conectar com nosso time. Só um minutinho! ⏱️',
+        'Claro! Um de nossos especialistas vai te atender agora. Aguarde! 🙋‍♂️'
+      ]),
+      requires_data: null,
+      priority: 11
     }
   ];
 
@@ -181,7 +192,7 @@ function insertDefaultTemplates(db: Database.Database) {
   }
 }
 
-export { db, drizzleDb };
+export { db };
 
 export function saveLead(data: any) {
   const stmt = db.prepare(`
@@ -217,7 +228,7 @@ export function saveInteraction(phone: string, direction: 'in' | 'out', message:
 }
 
 export function getSession(phone: string) {
-  const stmt = db.prepare('SELECT * FROM sessions WHERE phone = ?');
+  const stmt = db.query('SELECT * FROM sessions WHERE phone = ?');
   return stmt.get(phone);
 }
 
@@ -236,13 +247,13 @@ export function updateSession(phone: string, state: string, context: any) {
 }
 
 export function getTemplatesByIntent(intent: string) {
-  const stmt = db.prepare('SELECT * FROM message_templates WHERE intent = ? AND active = 1');
+  const stmt = db.query('SELECT * FROM message_templates WHERE intent = ? AND active = 1');
   return stmt.all(intent);
 }
 
 export function getAllConversations(limit = 50) {
-  const stmt = db.prepare(`
-    SELECT 
+  const stmt = db.query(`
+    SELECT
       l.phone,
       l.nome,
       l.empresa,
@@ -260,12 +271,13 @@ export function getAllConversations(limit = 50) {
 }
 
 export function getConversationHistory(phone: string, limit = 100) {
-  const stmt = db.prepare(`
+  const stmt = db.query(`
     SELECT * FROM interactions
     WHERE phone = ?
     ORDER BY created_at DESC
     LIMIT ?
   `);
 
-  return stmt.all(phone, limit).reverse();
+  const results = stmt.all(phone, limit) as any[];
+  return results.reverse();
 }

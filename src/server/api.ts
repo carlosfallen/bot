@@ -1,8 +1,5 @@
 // FILE: src/server/api.ts
 
-import { parse } from 'url';
-import type { IncomingMessage, ServerResponse } from 'http';
-import type { WebSocketServer } from 'ws';
 import { 
   getAllConversations, 
   getConversationHistory,
@@ -11,84 +8,229 @@ import {
 } from './db';
 import { getQRCode, getConnectionStatus } from './whatsapp';
 
-export async function handler(
-  req: IncomingMessage,
-  res: ServerResponse,
-  parsedUrl: ReturnType<typeof parse>,
-  wss: WebSocketServer
-) {
-  const { pathname } = parsedUrl;
+function corsHeaders() {
+  return {
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type',
+  };
+}
 
-  // CORS
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+function jsonResponse(data: any, status = 200) {
+  return new Response(JSON.stringify(data), {
+    status,
+    headers: {
+      'Content-Type': 'application/json',
+      ...corsHeaders(),
+    },
+  });
+}
+
+function errorResponse(message: string, status = 500) {
+  return jsonResponse({ error: message }, status);
+}
+
+export async function handler(req: Request, server: any): Promise<Response> {
+  const url = new URL(req.url);
+  const { pathname } = url;
 
   if (req.method === 'OPTIONS') {
-    res.writeHead(200);
-    res.end();
-    return;
+    return new Response(null, { status: 200, headers: corsHeaders() });
   }
 
-  // API Routes
+  if (pathname === '/api/health') {
+    return jsonResponse({
+      status: 'ok',
+      timestamp: new Date().toISOString(),
+      uptime: process.uptime(),
+      version: '2.0.0',
+      runtime: 'bun',
+    });
+  }
+
   if (pathname === '/api/status') {
     const status = getConnectionStatus();
     const qr = getQRCode();
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ status, qr }));
-    return;
+    
+    let qrDataUrl = null;
+    if (qr) {
+      try {
+        const QRCode = await import('qrcode');
+        qrDataUrl = await QRCode.toDataURL(qr);
+      } catch (error) {
+        console.error('Erro ao gerar QR Code:', error);
+      }
+    }
+    
+    return jsonResponse({
+      status,
+      connected: status === 'connected',
+      qr: qrDataUrl,
+    });
+  }
+
+  if (pathname === '/api/qr') {
+    const qr = getQRCode();
+    if (qr) {
+      try {
+        const QRCode = await import('qrcode');
+        const qrDataUrl = await QRCode.toDataURL(qr);
+        return jsonResponse({ qr: qrDataUrl });
+      } catch (error) {
+        console.error('Erro ao gerar QR Code:', error);
+        return errorResponse('Erro ao gerar QR Code');
+      }
+    }
+    return jsonResponse({ 
+      qr: null, 
+      message: 'Aguardando QR Code ou já conectado' 
+    });
   }
 
   if (pathname === '/api/conversations') {
     const conversations = getAllConversations();
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify(conversations));
-    return;
+    return jsonResponse(conversations);
   }
 
-  if (pathname?.startsWith('/api/conversation/')) {
+  if (pathname.startsWith('/api/conversation/')) {
     const phone = pathname.split('/').pop();
     if (phone) {
       const history = getConversationHistory(phone);
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify(history));
-      return;
+      return jsonResponse(history);
     }
+    return errorResponse('Telefone não informado', 400);
   }
 
   if (pathname === '/api/templates') {
-    const templates = db.prepare('SELECT * FROM message_templates WHERE active = 1 ORDER BY priority DESC').all();
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify(templates));
-    return;
+    const templates = db.prepare(
+      'SELECT * FROM message_templates WHERE active = 1 ORDER BY priority DESC'
+    ).all();
+    return jsonResponse(templates);
   }
 
   if (pathname === '/api/stats') {
-    const totalLeads = db.prepare('SELECT COUNT(*) as count FROM leads').get() as { count: number };
-    const totalInteractions = db.prepare('SELECT COUNT(*) as count FROM interactions').get() as { count: number };
-    const activeConversations = db.prepare(`
-      SELECT COUNT(*) as count FROM sessions 
+    const totalLeads = db.query(
+      'SELECT COUNT(*) as count FROM leads'
+    ).get() as { count: number };
+    
+    const totalInteractions = db.query(
+      'SELECT COUNT(*) as count FROM interactions'
+    ).get() as { count: number };
+    
+    const activeConversations = db.query(`
+      SELECT COUNT(*) as count FROM sessions
       WHERE last_interaction > strftime('%s', 'now') - 86400
     `).get() as { count: number };
+    
+    const hotLeads = db.query(`
+      SELECT COUNT(*) as count FROM leads WHERE qualification = 'quente'
+    `).get() as { count: number };
+    
+    const todayMessages = db.query(`
+      SELECT COUNT(*) as count FROM interactions
+      WHERE created_at > strftime('%s', 'now', 'start of day')
+    `).get() as { count: number };
 
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({
+    return jsonResponse({
       totalLeads: totalLeads.count,
-      totalInteractions: totalInteractions.count,
-      activeConversations: activeConversations.count
-    }));
-    return;
+      activeConversations: activeConversations.count,
+      todayMessages: todayMessages.count,
+      hotLeads: hotLeads.count,
+    });
   }
 
-  // Servir HTML estático simples
+  if (pathname === '/api/test-message' && req.method === 'POST') {
+    try {
+      const { phone, message } = await req.json();
+
+      if (!phone || !message) {
+        return errorResponse('phone e message são obrigatórios', 400);
+      }
+
+      const { analyzeMessage } = await import('../lib/nlp-engine-advanced');
+      const { buildMessage } = await import('../lib/message-builder');
+
+      const nlp = analyzeMessage(message);
+
+      let session = db.query('SELECT * FROM sessions WHERE phone = ?').get(phone) as any;
+      
+      if (!session) {
+        db.prepare(`
+          INSERT INTO sessions (phone, state, qualification, created_at, last_interaction)
+          VALUES (?, 'inicial', 'frio', strftime('%s', 'now'), strftime('%s', 'now'))
+        `).run(phone);
+        session = db.query('SELECT * FROM sessions WHERE phone = ?').get(phone) as any;
+      }
+
+      db.prepare(`
+        INSERT INTO interactions (phone, direction, message, intent, confidence, sentiment, created_at)
+        VALUES (?, 'incoming', ?, ?, ?, ?, strftime('%s', 'now'))
+      `).run(phone, message, nlp.intent, nlp.confidence, nlp.sentiment);
+
+      const context = {
+        state: session.state,
+        nome: session.nome,
+        empresa: session.empresa,
+        orcamento: session.orcamento,
+      };
+
+      const response = buildMessage(nlp.intent, context);
+
+      db.prepare(`
+        INSERT INTO interactions (phone, direction, message, created_at)
+        VALUES (?, 'outgoing', ?, strftime('%s', 'now'))
+      `).run(phone, response);
+
+      db.prepare(`
+        UPDATE sessions SET last_interaction = strftime('%s', 'now') WHERE phone = ?
+      `).run(phone);
+
+      server.publish('dashboard', JSON.stringify({
+        type: 'new_message',
+        phone,
+        message: response,
+        intent: nlp.intent,
+      }));
+
+      return jsonResponse({
+        success: true,
+        response,
+        nlp: {
+          intent: nlp.intent,
+          confidence: nlp.confidence,
+          sentiment: nlp.sentiment,
+          entities: nlp.entities,
+          keywords: nlp.keywords,
+        },
+      });
+    } catch (error) {
+      console.error('Erro no test-message:', error);
+      return errorResponse('Erro interno do servidor');
+    }
+  }
+
+  if (pathname === '/favicon.ico' || pathname === '/favicon.svg') {
+    const file = Bun.file('./public/favicon.svg');
+    const exists = await file.exists();
+    
+    if (exists) {
+      return new Response(file, {
+        headers: { 'Content-Type': 'image/svg+xml' },
+      });
+    }
+    return new Response(null, { status: 204 });
+  }
+
   if (pathname === '/' || pathname === '/index.html') {
-    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-    res.end(getIndexHTML());
-    return;
+    return new Response(getIndexHTML(), {
+      headers: { 
+        'Content-Type': 'text/html; charset=utf-8',
+        ...corsHeaders(),
+      },
+    });
   }
 
-  res.writeHead(404);
-  res.end('Not Found');
+  return new Response('Not Found', { status: 404 });
 }
 
 function getIndexHTML() {
@@ -229,7 +371,7 @@ function getIndexHTML() {
           <h2>📱 Conexão WhatsApp</h2>
           <div class="status disconnected" id="status">Desconectado</div>
           <div id="qrcode-container">
-            <p>Carregando...</p>
+            <p>Aguardando conexão...</p>
           </div>
         </div>
         
@@ -248,8 +390,13 @@ function getIndexHTML() {
   </div>
 
   <script>
-    const ws = new WebSocket('ws://localhost:3001');
+    const ws = new WebSocket('ws://localhost:3210');
     let currentPhone = null;
+    
+    ws.onopen = () => {
+      console.log('✅ WebSocket conectado');
+      checkStatus();
+    };
     
     ws.onmessage = (event) => {
       const data = JSON.parse(event.data);
@@ -287,47 +434,59 @@ function getIndexHTML() {
     }
     
     async function loadStats() {
-      const res = await fetch('/api/stats');
-      const stats = await res.json();
-      document.getElementById('stat-leads').textContent = stats.totalLeads;
-      document.getElementById('stat-messages').textContent = stats.totalInteractions;
-      document.getElementById('stat-active').textContent = stats.activeConversations;
+      try {
+        const res = await fetch('/api/stats');
+        const stats = await res.json();
+        document.getElementById('stat-leads').textContent = stats.totalLeads;
+        document.getElementById('stat-messages').textContent = stats.todayMessages;
+        document.getElementById('stat-active').textContent = stats.activeConversations;
+      } catch (error) {
+        console.error('Erro ao carregar stats:', error);
+      }
     }
     
     async function loadConversations() {
-      const res = await fetch('/api/conversations');
-      const convs = await res.json();
-      const container = document.getElementById('conversations');
-      
-      container.innerHTML = convs.map(c => \`
-        <div class="conversation-item \${c.phone === currentPhone ? 'active' : ''}" onclick="loadChat('\${c.phone}')">
-          <div class="conv-phone">\${c.phone}</div>
-          <div class="conv-name">\${c.nome || 'Sem nome'} - \${c.status}</div>
-          <div class="conv-last">\${c.last_message || 'Sem mensagens'}</div>
-        </div>
-      \`).join('');
+      try {
+        const res = await fetch('/api/conversations');
+        const convs = await res.json();
+        const container = document.getElementById('conversations');
+        
+        container.innerHTML = convs.map(c => \`
+          <div class="conversation-item \${c.phone === currentPhone ? 'active' : ''}" onclick="loadChat('\${c.phone}')">
+            <div class="conv-phone">\${c.phone}</div>
+            <div class="conv-name">\${c.nome || 'Sem nome'} - \${c.status}</div>
+            <div class="conv-last">\${c.last_message || 'Sem mensagens'}</div>
+          </div>
+        \`).join('');
+      } catch (error) {
+        console.error('Erro ao carregar conversas:', error);
+      }
     }
     
     async function loadChat(phone) {
-      currentPhone = phone;
-      document.getElementById('current-phone').textContent = '📞 ' + phone;
-      
-      const res = await fetch('/api/conversation/' + phone);
-      const history = await res.json();
-      
-      const container = document.getElementById('messages');
-      container.innerHTML = history.map(m => \`
-        <div class="message \${m.direction}">
-          <div>\${m.message}</div>
-          <div class="message-meta">
-            \${m.intent ? '🎯 ' + m.intent : ''} 
-            \${m.confidence ? ' (' + (m.confidence * 100).toFixed(0) + '%)' : ''}
+      try {
+        currentPhone = phone;
+        document.getElementById('current-phone').textContent = '📞 ' + phone;
+        
+        const res = await fetch('/api/conversation/' + phone);
+        const history = await res.json();
+        
+        const container = document.getElementById('messages');
+        container.innerHTML = history.map(m => \`
+          <div class="message \${m.direction}">
+            <div>\${m.message}</div>
+            <div class="message-meta">
+              \${m.intent ? '🎯 ' + m.intent : ''} 
+              \${m.confidence ? ' (' + (m.confidence * 100).toFixed(0) + '%)' : ''}
+            </div>
           </div>
-        </div>
-      \`).join('');
-      
-      container.scrollTop = container.scrollHeight;
-      loadConversations();
+        \`).join('');
+        
+        container.scrollTop = container.scrollHeight;
+        loadConversations();
+      } catch (error) {
+        console.error('Erro ao carregar chat:', error);
+      }
     }
     
     function addMessageToChat(data) {
@@ -346,21 +505,27 @@ function getIndexHTML() {
     }
     
     async function checkStatus() {
-      const res = await fetch('/api/status');
-      const data = await res.json();
-      updateStatus(data.status);
-      
-      if (data.qr) {
-        document.getElementById('qrcode-container').innerHTML = 
-          '<img src="' + data.qr + '" alt="QR Code"><p style="margin-top: 10px;">Escaneie com WhatsApp</p>';
+      try {
+        const res = await fetch('/api/status');
+        const data = await res.json();
+        updateStatus(data.status);
+        
+        if (data.qr) {
+          document.getElementById('qrcode-container').innerHTML = 
+            '<img src="' + data.qr + '" alt="QR Code"><p style="margin-top: 10px;">Escaneie com WhatsApp</p>';
+        } else if (data.status === 'connecting') {
+          document.getElementById('qrcode-container').innerHTML = 
+            '<p>🔄 Aguardando QR Code...</p>';
+        }
+      } catch (error) {
+        console.error('Erro ao verificar status:', error);
       }
     }
     
-    // Init
-    checkStatus();
     loadStats();
     loadConversations();
     
+    setInterval(checkStatus, 2000);
     setInterval(loadStats, 10000);
     setInterval(loadConversations, 5000);
   </script>

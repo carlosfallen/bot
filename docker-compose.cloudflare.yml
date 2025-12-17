@@ -1,0 +1,26 @@
+# FILE: docker-compose.cloudflare.yml
+# Configuração opcional para Cloudflare Tunnel
+# Uso: docker compose -f docker-compose.yml -f docker-compose.cloudflare.yml up -d
+
+version: '3.8'
+
+services:
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: imperio-cloudflared
+    restart: always
+    command: tunnel run
+    environment:
+      - TUNNEL_TOKEN=${CLOUDFLARED_TOKEN}
+    networks:
+      - imperio-network
+    depends_on:
+      nginx:
+        condition: service_healthy
+    labels:
+      - "app.name=imperio-lorde"
+      - "app.component=tunnel"
+
+networks:
+  imperio-network:
+    external: true

@@ -1,35 +1,52 @@
 {
   "name": "imperio-baileys-nlp",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "type": "module",
+  "description": "WhatsApp Bot NLP com Baileys, SolidJS e Bun - Império Lorde",
+  "author": "Império Lorde",
+  "license": "MIT",
   "scripts": {
     "dev": "bun --hot src/index.tsx",
     "build": "bun build src/index.tsx --outdir dist --target bun",
-    "start": "bun dist/index.js",
+    "start": "bun src/index.tsx",
+    "start:prod": "NODE_ENV=production bun src/index.tsx",
     "db:generate": "drizzle-kit generate:sqlite",
     "db:push": "drizzle-kit push:sqlite",
-    "db:migrate": "bun run src/server/migrate.ts"
+    "db:migrate": "bun run src/server/migrate.ts",
+    "docker:build": "docker compose build",
+    "docker:up": "docker compose up -d",
+    "docker:down": "docker compose down",
+    "docker:logs": "docker compose logs -f",
+    "docker:restart": "docker compose restart",
+    "setup": "sh scripts/setup-alpine.sh",
+    "backup": "sh scripts/backup.sh",
+    "health": "sh scripts/health-check.sh"
   },
   "dependencies": {
+    "@hapi/boom": "^10.0.1",
     "@solidjs/router": "^0.13.0",
     "@solidjs/start": "^1.0.0",
-    "solid-js": "^1.8.0",
     "@whiskeysockets/baileys": "^6.7.8",
-    "qrcode": "^1.5.3",
-    "drizzle-orm": "^0.29.0",
-    "better-sqlite3": "^9.2.0",
     "compromise": "^14.10.0",
+    "jimp": "^1.6.0",
     "natural": "^6.10.0",
     "pino": "^8.17.2",
-    "ws": "^8.16.0"
+    "pino-pretty": "^10.3.1",
+    "qrcode": "^1.5.3",
+    "qrcode-terminal": "^0.12.0",
+    "solid-js": "^1.8.0"
   },
   "devDependencies": {
     "@types/bun": "latest",
-    "@types/better-sqlite3": "^7.6.8",
+    "@types/node": "^20.10.6",
     "@types/ws": "^8.5.10",
-    "drizzle-kit": "^0.20.0",
+    "@types/qrcode": "^1.5.5",
     "typescript": "^5.3.3",
     "vite": "^5.0.0",
     "vite-plugin-solid": "^2.8.0"
+  },
+  "engines": {
+    "node": ">=20.0.0",
+    "bun": ">=1.0.0"
   }
 }

@@ -1,35 +1,40 @@
-// FILE: src/index.tsx
-
-import { createServer } from 'http';
-import { parse } from 'url';
 import { initWhatsApp } from './server/whatsapp';
-import { initWebSocket } from './server/websocket';
 import { initDatabase } from './server/db';
 import { handler } from './server/api';
 
-const PORT = process.env.PORT || 3000;
+const PORT = Number(process.env.PORT) || 3210;
 
-async function main() {
-  console.log('🚀 Iniciando Império Baileys NLP...');
+await initDatabase();
+console.log('✅ Database inicializado');
 
-  await initDatabase();
-  console.log('✅ Database inicializado');
+const server = Bun.serve({
+  port: PORT,
 
-  const wss = initWebSocket();
-  console.log('✅ WebSocket inicializado');
+  fetch(req, server) {  // ← server está disponível aqui
+    // Upgrade WebSocket
+    if (server.upgrade(req)) return;
 
-  await initWhatsApp(wss);
-  console.log('✅ WhatsApp inicializado');
+    // ✅ CORRETO: passa o server como 2º argumento
+    return handler(req, server);
+  },
 
-  const server = createServer(async (req, res) => {
-    const parsedUrl = parse(req.url || '', true);
-    await handler(req, res, parsedUrl, wss);
-  });
+  websocket: {
+    open(ws) {
+      ws.subscribe('dashboard');
+      console.log('✅ Cliente WebSocket conectado');
+      ws.send(JSON.stringify({ type: 'connected' }));
+    },
 
-  server.listen(PORT, () => {
-    console.log(`\n🌐 Servidor rodando em http://localhost:${PORT}`);
-    console.log(`📱 Acesse para configurar o WhatsApp\n`);
-  });
-}
+    message(ws, message) {
+      console.log('📨 WS message:', message.toString());
+    },
 
-main().catch(console.error);
+    close(ws) {
+      console.log('❌ Cliente WebSocket desconectado');
+    }
+  }
+});
+
+await initWhatsApp(server);
+console.log('✅ WhatsApp inicializado');
+console.log(`🌐 Servidor rodando em http://localhost:${PORT}`);
