@@ -51,8 +51,13 @@ export async function connectToWhatsApp() {
       }
 
       if (connection === 'close') {
-        const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
-        console.log('❌ Conexão fechada. Reconectando:', shouldReconnect);
+        const statusCode = lastDisconnect?.error?.output?.statusCode;
+        const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
+
+        console.log('❌ Conexão fechada');
+        console.log('   Status Code:', statusCode);
+        console.log('   Erro:', lastDisconnect?.error?.message || 'Sem mensagem');
+        console.log('   Reconectando:', shouldReconnect);
 
         connectionStatus = 'disconnected';
         qrCode = null;
@@ -60,6 +65,7 @@ export async function connectToWhatsApp() {
         broadcast({ type: 'status', data: 'disconnected' });
 
         if (shouldReconnect) {
+          console.log('⏳ Aguardando 5s para reconectar...');
           setTimeout(() => connectToWhatsApp(), 5000);
         }
       } else if (connection === 'open') {
@@ -115,8 +121,11 @@ export async function connectToWhatsApp() {
       }
     });
 
-  } catch (error) {
-    console.error('❌ Erro ao conectar WhatsApp:', error);
+  } catch (error: any) {
+    console.error('❌ Erro ao conectar WhatsApp');
+    console.error('   Tipo:', error?.name || 'Desconhecido');
+    console.error('   Mensagem:', error?.message || error);
+    console.error('   Stack:', error?.stack);
     connectionStatus = 'disconnected';
     sock = null;
   }
