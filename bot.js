@@ -73,20 +73,16 @@ async function connectToWhatsApp() {
         markOnlineOnConnect: false
     });
 
-    if (!sock.authState.creds.registered) {
-        const phoneNumber = await question('Digite seu número do WhatsApp (com DDI, ex: 5511999999999): ');
-        const code = await sock.requestPairingCode(phoneNumber);
-        console.log(`\n✅ Código de pareamento: ${code}\n`);
-    }
+    sock.ev.on('creds.update', saveCreds);
 
-    sock.ev.on('connection.update', (update) => {
+    sock.ev.on('connection.update', async (update) => {
         const { connection, lastDisconnect } = update;
 
         if (connection === 'close') {
             const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
             console.log('❌ Conexão fechada. Reconectando:', shouldReconnect);
             if (shouldReconnect) {
-                connectToWhatsApp();
+                setTimeout(() => connectToWhatsApp(), 3000);
             }
         } else if (connection === 'open') {
             console.log('\n━'.repeat(50));
@@ -96,8 +92,6 @@ async function connectToWhatsApp() {
             rl.close();
         }
     });
-
-    sock.ev.on('creds.update', saveCreds);
 
     sock.ev.on('messages.upsert', async ({ messages, type }) => {
         try {
@@ -112,6 +106,13 @@ async function connectToWhatsApp() {
             console.log('❌ Erro ao processar mensagem:', error.message);
         }
     });
+
+    // Pairing code DEPOIS de registrar os eventos
+    if (!sock.authState.creds.registered) {
+        const phoneNumber = await question('Digite seu número do WhatsApp (com DDI, ex: 5511999999999): ');
+        const code = await sock.requestPairingCode(phoneNumber);
+        console.log(`\n✅ Código de pareamento: ${code}\n`);
+    }
 }
 
 async function handleMessage(msg) {
