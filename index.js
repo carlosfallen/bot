@@ -20,13 +20,13 @@ async function connectToWhatsApp() {
             keys: makeCacheableSignalKeyStore(state.keys, logger)
         },
         logger,
-        printQRInTerminal: false,
+        printQRInTerminal: true,
         syncFullHistory: false,
         markOnlineOnConnect: false
     });
 
     if (!sock.authState.creds.registered) {
-        const phoneNumber = await question('Digite seu número do WhatsApp (com DDI, ex: 5511999999999): ');
+        const phoneNumber = await question('Digite seu número do WhatsApp (com DDI, ex: 5589994333316): ');
         const code = await sock.requestPairingCode(phoneNumber);
         console.log(`Código de pareamento: ${code}`);
     }

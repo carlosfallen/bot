@@ -5,6 +5,13 @@ const { default: makeWASocket, DisconnectReason, useMultiFileAuthState, makeCach
 const readline = require('readline');
 const P = require('pino');
 
+const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout
+});
+
+const question = (text) => new Promise((resolve) => rl.question(text, resolve));
+
 // Importar módulos do bot
 const nlpAnalyzer = require('./src/nlp/analyzer.js');
 const CloudflareD1 = require('./src/database/d1.js');
@@ -12,13 +19,6 @@ const BotAPI = require('./src/api/server.js');
 const config = require('./src/config/index.js');
 
 const logger = P({ level: 'silent' });
-
-const rl = readline.createInterface({
-    input: process.stdin,
-    output: process.stdout
-});
-
-const question = (text) => new Promise((resolve) => rl.question(text, resolve));
 
 // Variáveis globais
 let sock = null;
@@ -45,41 +45,39 @@ async function connectToWhatsApp() {
             keys: makeCacheableSignalKeyStore(state.keys, logger)
         },
         logger,
-        printQRInTerminal: false,
         syncFullHistory: false,
-        markOnlineOnConnect: false,
-        // Configurações para manter conexão viva
-        keepAliveIntervalMs: 10000,
-        connectTimeoutMs: 60000,
-        defaultQueryTimeoutMs: 60000,
-        retryRequestDelayMs: 250
+        markOnlineOnConnect: false
     });
+
+    // Pairing code se não estiver registrado
+    if (!sock.authState.creds.registered) {
+        const phoneNumber = await question('Digite seu número do WhatsApp (com DDI, ex: 5589994333316): ');
+        const code = await sock.requestPairingCode(phoneNumber);
+        console.log(`\n🔑 Código de pareamento: ${code}\n`);
+        console.log('Digite este código no seu WhatsApp: Dispositivos Conectados > Conectar Dispositivo > Código\n');
+    }
 
     sock.ev.on('creds.update', saveCreds);
 
-    // Flag para controlar se já pediu o pairing code
-    let pairingCodeRequested = false;
+    sock.ev.on('connection.update', (update) => {
+        const { connection, lastDisconnect } = update;
 
-    sock.ev.on('connection.update', async (update) => {
-        const { connection, lastDisconnect, qr } = update;
-
-        // Solicitar pairing code quando conectar OU quando aparecer QR
-        if ((connection === 'connecting' || qr) && !sock.authState.creds.registered && !pairingCodeRequested) {
-            pairingCodeRequested = true;
-            try {
-                const phoneNumber = await question('Digite seu número do WhatsApp (com DDI, ex: 5511999999999): ');
-                const code = await sock.requestPairingCode(phoneNumber);
-                console.log(`\n✅ Código de pareamento: ${code}\n`);
-                console.log('📱 Abra o WhatsApp e digite o código acima\n');
-            } catch (error) {
-                console.error('Erro ao gerar código:', error.message);
-                pairingCodeRequested = false; // Resetar para tentar novamente
-            }
-        }
+        console.log('📊 Connection update:', connection);
 
         if (connection === 'close') {
-            const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
-            console.log('Conexão fechada. Reconectando:', shouldReconnect);
+            const statusCode = lastDisconnect?.error?.output?.statusCode;
+            const reason = Object.keys(DisconnectReason).find(
+                key => DisconnectReason[key] === statusCode
+            ) || statusCode;
+
+            console.log('❌ Conexão fechada');
+            console.log('   Motivo:', reason);
+            console.log('   Status Code:', statusCode);
+            console.log('   Erro:', lastDisconnect?.error?.message);
+
+            const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
+            console.log('   Reconectar?', shouldReconnect);
+
             if (shouldReconnect) {
                 setTimeout(() => connectToWhatsApp(), 3000);
             }
@@ -113,7 +111,6 @@ async function connectToWhatsApp() {
 
 async function initializeBackend() {
     try {
-        // Inicializar banco de dados
         console.log('\n📦 Conectando ao banco de dados...');
         db = new CloudflareD1({
             accountId: config.cloudflare.accountId,
@@ -121,7 +118,6 @@ async function initializeBackend() {
             apiToken: config.cloudflare.apiToken
         });
 
-        // Carregar configurações do banco
         botConfig = await db.getAllConfig();
         console.log('✅ Banco de dados conectado');
         console.log(`✅ ${Object.keys(botConfig).length} configurações carregadas`);
@@ -131,7 +127,6 @@ async function initializeBackend() {
     }
 
     try {
-        // Inicializar API
         console.log('🌐 Iniciando servidor web...');
         api = new BotAPI(db, { getSocket: () => sock });
         api.start();
@@ -151,7 +146,6 @@ async function handleMessage(msg) {
 
     if (!messageText) return;
 
-    // Determinar tipo de chat
     const chatType = remoteJid.endsWith('@g.us') ? 'group' :
                     remoteJid.endsWith('@newsletter') ? 'channel' :
                     'private';
@@ -159,13 +153,11 @@ async function handleMessage(msg) {
     console.log(`\n📨 Mensagem ${chatType} de ${remoteJid}`);
     console.log(`   Texto: ${messageText}`);
 
-    // Verificar configurações globais
     if (!botConfig.bot_enabled) {
         console.log('   ⏸️  Bot desativado globalmente');
         return;
     }
 
-    // Verificar se deve responder baseado no tipo de chat
     if (chatType === 'group' && !botConfig.respond_to_groups) {
         console.log('   ⏸️  Bot não responde em grupos');
         return;
@@ -176,11 +168,9 @@ async function handleMessage(msg) {
         return;
     }
 
-    // Extrair número de telefone
     const phone = remoteJid.split('@')[0];
 
     try {
-        // Salvar ou atualizar lead (somente se DB disponível)
         let leadId = null;
         if (db && botConfig.auto_save_leads && chatType === 'private') {
             try {
@@ -197,13 +187,11 @@ async function handleMessage(msg) {
             }
         }
 
-        // Obter ou criar conversa (somente se DB disponível)
         let conversation = null;
         if (db) {
             try {
                 conversation = await db.getOrCreateConversation(remoteJid, leadId, chatType);
 
-                // Verificar se bot está ativo para esta conversa
                 if (!conversation.is_bot_active) {
                     console.log('   ⏸️  Bot desativado para esta conversa');
                     return;
@@ -213,7 +201,6 @@ async function handleMessage(msg) {
             }
         }
 
-        // Verificar horário comercial
         if (botConfig.business_hours_only && !isBusinessHours()) {
             const response = botConfig.away_message;
             await sock.sendMessage(remoteJid, { text: response });
@@ -221,11 +208,9 @@ async function handleMessage(msg) {
             return;
         }
 
-        // Processar com NLP
         const nlpResult = await nlpAnalyzer.analyze(messageText, remoteJid);
         console.log(`   🧠 Intent: ${nlpResult.intent} (${(nlpResult.confidence * 100).toFixed(1)}%)`);
 
-        // Salvar mensagem recebida (somente se DB disponível)
         if (db && conversation) {
             try {
                 await db.saveMessage(conversation.id, {
@@ -243,12 +228,10 @@ async function handleMessage(msg) {
             }
         }
 
-        // Enviar resposta
         const response = nlpResult.response;
         await sock.sendMessage(remoteJid, { text: response });
         console.log(`   ✅ Resposta enviada`);
 
-        // Salvar resposta do bot (somente se DB disponível)
         if (db && conversation) {
             try {
                 await db.saveMessage(conversation.id, {
@@ -267,7 +250,6 @@ async function handleMessage(msg) {
             }
         }
 
-        // Atualizar lead com entidades extraídas (somente se DB disponível)
         if (db && leadId && nlpResult.shouldCollectData && Object.keys(nlpResult.entities).length > 0) {
             try {
                 await db.saveLead({
