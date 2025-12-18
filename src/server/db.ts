@@ -1,9 +1,19 @@
-// FILE: src/server/db.ts
-// Database usando bun:sqlite (nativo do Bun)
+// src/server/db.ts - CORRIGIDO COM CRIAÇÃO DE DIRETÓRIO
 
 import { Database } from 'bun:sqlite';
+import { existsSync, mkdirSync } from 'fs';
+import { dirname } from 'path';
 
-const db = new Database(process.env.DB_PATH || './data/imperio.db', { create: true });
+// Criar diretório data se não existir
+const dbPath = process.env.DB_PATH || './data/imperio.db';
+const dbDir = dirname(dbPath);
+
+if (!existsSync(dbDir)) {
+  mkdirSync(dbDir, { recursive: true });
+  console.log(`📁 Diretório criado: ${dbDir}`);
+}
+
+const db = new Database(dbPath, { create: true });
 
 export async function initDatabase() {
   db.exec(`
@@ -121,44 +131,14 @@ function insertDefaultTemplates() {
       priority: 6
     },
     {
-      intent: 'coleta_empresa',
+      intent: 'handoff',
       variations: JSON.stringify([
-        'Legal! E qual o nome da sua empresa?',
-        'Show! Nome da empresa?',
-        'Perfeito! Qual empresa?'
-      ]),
-      requires_data: 'nome',
-      priority: 5
-    },
-    {
-      intent: 'confirma_dados',
-      variations: JSON.stringify([
-        'Entendi! Vou resumir:\n\n{dados}\n\nEstá correto?',
-        'Show! Deixa eu confirmar:\n\n{dados}\n\nTá certo?',
-        'Boa! Então temos:\n\n{dados}\n\nConfirma?'
-      ]),
-      requires_data: 'nome,empresa',
-      priority: 4
-    },
-    {
-      intent: 'agendamento',
-      variations: JSON.stringify([
-        'Perfeito! Vamos agendar uma call de 15min?\n\n📅 Amanhã 10h\n📅 Depois de amanhã 14h\n📅 Outro horário',
-        'Ótimo! Quando podemos conversar?\n\n- Amanhã de manhã\n- Amanhã à tarde\n- Me fala um horário',
-        'Show! Qual horário é melhor pra você?\n\n• Manhã (9h-12h)\n• Tarde (14h-17h)\n• Me sugere'
-      ]),
-      requires_data: 'nome,servico_interesse',
-      priority: 3
-    },
-    {
-      intent: 'fora_horario',
-      variations: JSON.stringify([
-        'Opa! Estamos fora do horário agora (seg-sex, 8h-18h). Já anotei tudo e te retorno amanhã! 😊',
-        'Recebido! Estamos fechados agora, mas amanhã de manhã já te dou retorno! 👍',
-        'Olá! Fora do expediente no momento. Anotei sua mensagem e retorno no próximo dia útil! 🙂'
+        'Entendi! Vou transferir você para um atendente humano. Aguarde um momento! 👤',
+        'Sem problemas! Já vou te conectar com nosso time. Só um minutinho! ⏱️',
+        'Claro! Um de nossos especialistas vai te atender agora. Aguarde! 🙋‍♂️'
       ]),
       requires_data: null,
-      priority: 2
+      priority: 11
     },
     {
       intent: 'nao_entendi',
@@ -169,16 +149,6 @@ function insertDefaultTemplates() {
       ]),
       requires_data: null,
       priority: 1
-    },
-    {
-      intent: 'handoff',
-      variations: JSON.stringify([
-        'Entendi! Vou transferir você para um atendente humano. Aguarde um momento! 👤',
-        'Sem problemas! Já vou te conectar com nosso time. Só um minutinho! ⏱️',
-        'Claro! Um de nossos especialistas vai te atender agora. Aguarde! 🙋‍♂️'
-      ]),
-      requires_data: null,
-      priority: 11
     }
   ];
 

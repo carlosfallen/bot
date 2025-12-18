@@ -260,7 +260,6 @@ function jsonResponse(data: any, status = 200) {
 function errorResponse(message: string, status = 500) {
   return jsonResponse({ error: message }, status);
 }
-
 function getIndexHTML() {
   return `<!DOCTYPE html>
 <html lang="pt-BR">
@@ -268,210 +267,230 @@ function getIndexHTML() {
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Império Lorde - WhatsApp Bot</title>
-  <script src="https://cdn.tailwindcss.com"></script>
-</head>
-<body class="bg-gradient-to-br from-purple-600 to-blue-600 min-h-screen p-4">
-  <div id="root" class="max-w-md mx-auto"></div>
-  
-  <script type="module">
-    import { render } from 'https://cdn.skypack.dev/solid-js/web';
-    import { createSignal, Show, onMount } from 'https://cdn.skypack.dev/solid-js';
-    
-    function App() {
-      const [connected, setConnected] = createSignal(false);
-      const [qrCode, setQrCode] = createSignal('');
-      const [mode, setMode] = createSignal('qr');
-      const [phoneNumber, setPhoneNumber] = createSignal('');
-      const [pairingCode, setPairingCode] = createSignal('');
-      const [loading, setLoading] = createSignal(false);
-      
-      onMount(() => {
-        checkStatus();
-        setInterval(checkStatus, 3000);
-      });
-      
-      const checkStatus = async () => {
-        try {
-          const res = await fetch('/api/status');
-          const data = await res.json();
-          setConnected(data.connected);
-          if (data.qr) setQrCode(data.qr);
-        } catch (e) {
-          console.error(e);
-        }
-      };
-      
-      const requestPairing = async () => {
-        if (!phoneNumber().trim()) {
-          alert('Digite um número válido');
-          return;
-        }
-        
-        setLoading(true);
-        try {
-          const res = await fetch('/api/pairing-code', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ phone: phoneNumber() })
-          });
-          const data = await res.json();
-          
-          if (data.success) {
-            setPairingCode(data.code);
-            alert(\`Código: \${data.code}\\n\\nDigite no WhatsApp:\\nConfigurações > Aparelhos conectados > Conectar > Digite o código\`);
-          } else {
-            alert('Erro: ' + (data.error || 'Desconhecido'));
-          }
-        } catch (e) {
-          alert('Erro ao gerar código');
-        } finally {
-          setLoading(false);
-        }
-      };
-      
-      const disconnect = async () => {
-        if (!confirm('Desconectar WhatsApp?')) return;
-        try {
-          await fetch('/api/disconnect', { method: 'POST' });
-          alert('Desconectado!');
-          window.location.reload();
-        } catch (e) {
-          alert('Erro ao desconectar');
-        }
-      };
-      
-      const restart = async () => {
-        if (!confirm('Reiniciar conexão? Isso limpará a sessão atual.')) return;
-        try {
-          await fetch('/api/restart', { method: 'POST' });
-          alert('Reiniciado! Aguarde novo QR...');
-          setQrCode('');
-          setPairingCode('');
-          setTimeout(checkStatus, 3000);
-        } catch (e) {
-          alert('Erro ao reiniciar');
-        }
-      };
-      
-      return (
-        <div class="bg-white rounded-2xl shadow-2xl p-6">
-          <div class="flex justify-between items-center mb-6">
-            <h1 class="text-2xl font-bold text-gray-800">📱 WhatsApp Bot</h1>
-            <Show when={connected()}>
-              <div class="flex gap-2">
-                <button onclick={disconnect} class="px-3 py-1 bg-red-500 text-white rounded text-sm hover:bg-red-600">
-                  Desconectar
-                </button>
-                <button onclick={restart} class="px-3 py-1 bg-orange-500 text-white rounded text-sm hover:bg-orange-600">
-                  Reiniciar
-                </button>
-              </div>
-            </Show>
-          </div>
-          
-          <Show when={connected()}>
-            <div class="text-center py-12">
-              <div class="text-6xl mb-4">✅</div>
-              <div class="text-2xl font-bold text-green-600">Conectado!</div>
-              <div class="text-gray-600 mt-2">WhatsApp pronto para uso</div>
-            </div>
-          </Show>
-          
-          <Show when={!connected()}>
-            <div class="flex gap-2 border-b mb-4">
-              <button
-                onclick={() => setMode('qr')}
-                class={\`px-4 py-2 font-medium \${mode() === 'qr' ? 'border-b-2 border-purple-600 text-purple-600' : 'text-gray-600'}\`}
-              >
-                QR Code
-              </button>
-              <button
-                onclick={() => setMode('pairing')}
-                class={\`px-4 py-2 font-medium \${mode() === 'pairing' ? 'border-b-2 border-purple-600 text-purple-600' : 'text-gray-600'}\`}
-              >
-                Código
-              </button>
-            </div>
-            
-            <Show when={mode() === 'qr'}>
-              <Show when={qrCode()}>
-                <div class="space-y-4">
-                  <img src={qrCode()} class="w-full max-w-xs mx-auto border rounded-lg" alt="QR Code" />
-                  <div class="text-sm text-gray-600 space-y-2">
-                    <p class="font-medium">Como conectar:</p>
-                    <ol class="list-decimal list-inside text-xs space-y-1">
-                      <li>Abra WhatsApp no celular</li>
-                      <li>Toque em Configurações</li>
-                      <li>Aparelhos conectados</li>
-                      <li>Conectar um aparelho</li>
-                      <li>Escaneie este QR Code</li>
-                    </ol>
-                  </div>
-                  <button onclick={checkStatus} class="w-full px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700">
-                    🔄 Atualizar QR
-                  </button>
-                </div>
-              </Show>
-              <Show when={!qrCode()}>
-                <div class="text-center py-8">
-                  <div class="text-4xl mb-4">⏳</div>
-                  <div class="text-gray-600">Gerando QR Code...</div>
-                </div>
-              </Show>
-            </Show>
-            
-            <Show when={mode() === 'pairing'}>
-              <div class="space-y-4">
-                <div class="bg-blue-50 p-3 rounded-lg text-sm">
-                  <p class="font-medium text-blue-800 mb-1">💡 Como funciona:</p>
-                  <ol class="list-decimal list-inside text-xs space-y-1">
-                    <li>Digite seu número abaixo</li>
-                    <li>Clique em Gerar Código</li>
-                    <li>No WhatsApp: Aparelhos conectados → Digite o código</li>
-                  </ol>
-                </div>
-                
-                <div>
-                  <label class="block text-sm font-medium mb-2">Número (com DDI)</label>
-                  <input
-                    type="text"
-                    value={phoneNumber()}
-                    oninput={(e) => setPhoneNumber(e.target.value)}
-                    placeholder="5585999999999"
-                    class="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-purple-500"
-                  />
-                  <div class="text-xs text-gray-500 mt-1">Ex: 55 + DDD + número</div>
-                </div>
-                
-                <button
-                  onclick={requestPairing}
-                  disabled={loading()}
-                  class="w-full px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 disabled:bg-gray-300"
-                >
-                  {loading() ? '⏳ Gerando...' : '🔑 Gerar Código'}
-                </button>
-                
-                <Show when={pairingCode()}>
-                  <div class="bg-green-50 border-2 border-green-500 rounded-lg p-4 text-center">
-                    <div class="text-sm text-green-800 mb-2">✅ Código gerado!</div>
-                    <div class="text-3xl font-bold text-green-600 tracking-widest">{pairingCode()}</div>
-                    <div class="text-xs text-green-700 mt-2">Digite no WhatsApp em 60s</div>
-                  </div>
-                </Show>
-              </div>
-            </Show>
-            
-            <div class="pt-4 border-t mt-4">
-              <button onclick={restart} class="w-full px-4 py-2 bg-orange-500 text-white rounded-lg hover:bg-orange-600 text-sm">
-                🔄 Reiniciar Conexão (Limpar Sessão)
-              </button>
-            </div>
-          </Show>
-        </div>
-      );
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { 
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      min-height: 100vh;
+      padding: 20px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
     }
-    
-    render(() => <App />, document.getElementById('root'));
+    .container { 
+      max-width: 500px; 
+      width: 100%;
+      background: white; 
+      border-radius: 20px; 
+      box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+      padding: 30px;
+    }
+    .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 30px; }
+    h1 { font-size: 24px; color: #333; }
+    .btn { 
+      padding: 8px 16px; 
+      border: none; 
+      border-radius: 8px; 
+      cursor: pointer; 
+      font-size: 14px;
+      font-weight: 600;
+      transition: all 0.2s;
+    }
+    .btn:hover { transform: translateY(-2px); }
+    .btn-red { background: #ef4444; color: white; }
+    .btn-red:hover { background: #dc2626; }
+    .btn-orange { background: #f97316; color: white; }
+    .btn-orange:hover { background: #ea580c; }
+    .btn-green { background: #10b981; color: white; width: 100%; margin-top: 15px; }
+    .btn-green:hover { background: #059669; }
+    .btn-purple { background: #8b5cf6; color: white; width: 100%; }
+    .btn-purple:hover { background: #7c3aed; }
+    .tabs { display: flex; gap: 10px; border-bottom: 2px solid #e5e7eb; margin-bottom: 20px; }
+    .tab { 
+      padding: 12px 24px; 
+      border: none; 
+      background: none; 
+      cursor: pointer; 
+      font-weight: 600;
+      color: #6b7280;
+      border-bottom: 3px solid transparent;
+    }
+    .tab.active { color: #8b5cf6; border-bottom-color: #8b5cf6; }
+    .content { display: none; }
+    .content.active { display: block; }
+    img { max-width: 300px; width: 100%; border-radius: 12px; margin: 0 auto; display: block; }
+    input { 
+      width: 100%; 
+      padding: 12px; 
+      border: 2px solid #e5e7eb; 
+      border-radius: 8px; 
+      font-size: 14px;
+      margin-bottom: 15px;
+    }
+    input:focus { outline: none; border-color: #8b5cf6; }
+    .success { background: #10b981; color: white; padding: 20px; border-radius: 12px; text-align: center; }
+    .success-icon { font-size: 60px; margin-bottom: 10px; }
+    .code { font-size: 32px; font-weight: bold; letter-spacing: 8px; margin: 20px 0; }
+    .loading { text-align: center; padding: 40px; color: #6b7280; }
+    .hidden { display: none; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>📱 WhatsApp Bot</h1>
+      <div id="buttons" class="hidden" style="display: flex; gap: 8px;">
+        <button class="btn btn-red" onclick="disconnect()">Desconectar</button>
+        <button class="btn btn-orange" onclick="restart()">Reiniciar</button>
+      </div>
+    </div>
+
+    <div id="connected" class="hidden">
+      <div class="success">
+        <div class="success-icon">✅</div>
+        <div style="font-size: 24px; font-weight: bold;">Conectado!</div>
+        <div style="margin-top: 10px; opacity: 0.9;">WhatsApp pronto para uso</div>
+      </div>
+    </div>
+
+    <div id="disconnected">
+      <div class="tabs">
+        <button class="tab active" onclick="showTab('qr')">QR Code</button>
+        <button class="tab" onclick="showTab('pairing')">Código</button>
+      </div>
+
+      <div id="qr-content" class="content active">
+        <div id="qr-loading" class="loading">
+          <div style="font-size: 40px; margin-bottom: 10px;">⏳</div>
+          <div>Gerando QR Code...</div>
+        </div>
+        <div id="qr-display" class="hidden">
+          <img id="qr-image" src="" alt="QR Code">
+          <button class="btn btn-green" onclick="checkStatus()">🔄 Atualizar QR</button>
+        </div>
+      </div>
+
+      <div id="pairing-content" class="content">
+        <input type="text" id="phone-input" placeholder="5585999999999" maxlength="13">
+        <button class="btn btn-purple" onclick="requestPairing()" id="pairing-btn">
+          🔑 Gerar Código
+        </button>
+        <div id="code-display" class="hidden" style="background: #dcfce7; border: 3px solid #10b981; border-radius: 12px; padding: 20px; text-align: center; margin-top: 15px;">
+          <div style="color: #065f46; font-weight: bold; margin-bottom: 10px;">✅ Código gerado!</div>
+          <div class="code" id="pairing-code" style="color: #10b981;"></div>
+          <div style="color: #065f46; font-size: 12px;">Digite no WhatsApp em 60s</div>
+        </div>
+      </div>
+
+      <div style="margin-top: 20px; padding-top: 20px; border-top: 2px solid #e5e7eb;">
+        <button class="btn btn-orange" style="width: 100%;" onclick="restart()">
+          🔄 Reiniciar Conexão
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let connected = false;
+
+    function showTab(tab) {
+      document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+      document.querySelectorAll('.content').forEach(c => c.classList.remove('active'));
+      
+      if (tab === 'qr') {
+        document.querySelectorAll('.tab')[0].classList.add('active');
+        document.getElementById('qr-content').classList.add('active');
+      } else {
+        document.querySelectorAll('.tab')[1].classList.add('active');
+        document.getElementById('pairing-content').classList.add('active');
+      }
+    }
+
+    async function checkStatus() {
+      try {
+        const res = await fetch('/api/status');
+        const data = await res.json();
+        
+        connected = data.connected;
+        
+        if (connected) {
+          document.getElementById('connected').classList.remove('hidden');
+          document.getElementById('disconnected').classList.add('hidden');
+          document.getElementById('buttons').classList.remove('hidden');
+        } else {
+          document.getElementById('connected').classList.add('hidden');
+          document.getElementById('disconnected').classList.remove('hidden');
+          document.getElementById('buttons').classList.add('hidden');
+          
+          if (data.qr) {
+            document.getElementById('qr-loading').classList.add('hidden');
+            document.getElementById('qr-display').classList.remove('hidden');
+            document.getElementById('qr-image').src = data.qr;
+          }
+        }
+      } catch (e) {
+        console.error(e);
+      }
+    }
+
+    async function requestPairing() {
+      const phone = document.getElementById('phone-input').value.trim();
+      if (!phone) {
+        alert('Digite um número válido');
+        return;
+      }
+
+      const btn = document.getElementById('pairing-btn');
+      btn.textContent = '⏳ Gerando...';
+      btn.disabled = true;
+
+      try {
+        const res = await fetch('/api/pairing-code', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ phone })
+        });
+        const data = await res.json();
+
+        if (data.success) {
+          document.getElementById('code-display').classList.remove('hidden');
+          document.getElementById('pairing-code').textContent = data.code;
+        } else {
+          alert('Erro: ' + (data.error || 'Desconhecido'));
+        }
+      } catch (e) {
+        alert('Erro ao gerar código');
+      } finally {
+        btn.textContent = '🔑 Gerar Código';
+        btn.disabled = false;
+      }
+    }
+
+    async function disconnect() {
+      if (!confirm('Desconectar WhatsApp?')) return;
+      try {
+        await fetch('/api/disconnect', { method: 'POST' });
+        alert('Desconectado!');
+        location.reload();
+      } catch (e) {
+        alert('Erro ao desconectar');
+      }
+    }
+
+    async function restart() {
+      if (!confirm('Reiniciar? Isso limpará a sessão.')) return;
+      try {
+        await fetch('/api/restart', { method: 'POST' });
+        alert('Reiniciado! Aguarde...');
+        location.reload();
+      } catch (e) {
+        alert('Erro ao reiniciar');
+      }
+    }
+
+    checkStatus();
+    setInterval(checkStatus, 3000);
   </script>
 </body>
 </html>`;
