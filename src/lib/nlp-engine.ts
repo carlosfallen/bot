@@ -1,4 +1,4 @@
-// src/lib/nlp-engine-advanced.ts - VERSÃO SIMPLIFICADA (SEM COMPROMISE)
+// src/lib/nlp-engine.ts - NLP Engine com Natural.js
 
 import natural from 'natural';
 

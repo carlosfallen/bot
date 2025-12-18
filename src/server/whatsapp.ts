@@ -1,151 +1,132 @@
-// src/server/whatsapp.ts - VERSÃO SIMPLIFICADA (SEM LOOPS)
+// src/server/whatsapp.ts - WhatsApp Connection Handler
+import { default as makeWASocket, DisconnectReason, useMultiFileAuthState, makeCacheableSignalKeyStore } from '@whiskeysockets/baileys';
+import P from 'pino';
 
-import makeWASocket, {
-  DisconnectReason,
-  useMultiFileAuthState,
-  makeCacheableSignalKeyStore,
-  type WASocket
-} from '@whiskeysockets/baileys';
-import { Boom } from '@hapi/boom';
-import pino from 'pino';
-import { existsSync, mkdirSync } from 'fs';
-import fs from 'fs/promises';
+const logger = P({ level: 'silent' });
+const AUTH_DIR = 'auth_info';
 
-const logger = pino({ level: 'silent' });
-const SESSION_DIR = './sessions';
-
-if (!existsSync(SESSION_DIR)) {
-  mkdirSync(SESSION_DIR, { recursive: true });
-}
-
-let sock: WASocket | null = null;
-let qrString: string | null = null;
+let sock: any = null;
 let connectionStatus: 'disconnected' | 'connecting' | 'connected' = 'disconnected';
-let bunServer: any = null;
+let qrCode: string | null = null;
+let broadcastFn: ((msg: any) => void) | null = null;
 
-export async function initWhatsApp(server: any) {
-  bunServer = server;
-  await connectWhatsApp();
+export function setBroadcastFunction(fn: (msg: any) => void) {
+  broadcastFn = fn;
 }
 
-async function connectWhatsApp() {
-  // NÃO RECONECTAR SE JÁ EXISTE SOCKET
-  if (sock) {
-    console.log('⚠️ Socket já existe');
-    return;
+function broadcast(message: any) {
+  if (broadcastFn) {
+    try {
+      broadcastFn(message);
+    } catch (error) {
+      console.error('❌ Erro ao fazer broadcast:', error);
+    }
   }
+}
 
+export async function connectToWhatsApp() {
   try {
-    const { state, saveCreds } = await useMultiFileAuthState(SESSION_DIR);
-    
+    const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
+
     sock = makeWASocket({
       auth: {
         creds: state.creds,
         keys: makeCacheableSignalKeyStore(state.keys, logger)
       },
       logger,
-      printQRInTerminal: false
+      printQRInTerminal: false,
+      syncFullHistory: false,
+      markOnlineOnConnect: false
     });
 
-    if (!sock.authState.creds.registered) {
-      console.log('⚠️ Dispositivo não registrado - aguardando QR Code ou Pairing Code');
-    }
-
-    sock.ev.on('connection.update', async (update) => {
+    sock.ev.on('connection.update', async (update: any) => {
       const { connection, lastDisconnect, qr } = update;
 
       if (qr) {
-        qrString = qr;
+        qrCode = qr;
         const QRCode = await import('qrcode');
         const qrDataUrl = await QRCode.toDataURL(qr);
-        broadcastToClients({ type: 'qr', data: qrDataUrl });
+        broadcast({ type: 'qr', data: qrDataUrl });
         console.log('📱 QR Code gerado');
       }
 
-      if (connection === 'connecting') {
-        connectionStatus = 'connecting';
-        broadcastToClients({ type: 'status', data: 'connecting' });
-        console.log('🔄 Conectando...');
-      }
-
-      if (connection === 'open') {
-        connectionStatus = 'connected';
-        qrString = null;
-        broadcastToClients({ type: 'status', data: 'connected' });
-        console.log('✅ WhatsApp conectado!');
-      }
-
       if (connection === 'close') {
-        const statusCode = (lastDisconnect?.error as Boom)?.output?.statusCode;
-        const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
-        
-        console.log('❌ Conexão fechada. Código:', statusCode);
-        
-        connectionStatus = 'disconnected';
-        sock = null;
-        broadcastToClients({ type: 'status', data: 'disconnected' });
+        const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
+        console.log('❌ Conexão fechada. Reconectando:', shouldReconnect);
 
-        // APENAS reconectar se for desconexão não intencional
+        connectionStatus = 'disconnected';
+        qrCode = null;
+        sock = null;
+        broadcast({ type: 'status', data: 'disconnected' });
+
         if (shouldReconnect) {
-          console.log('🔄 Reconectando em 5s...');
-          setTimeout(() => connectWhatsApp(), 5000);
+          setTimeout(() => connectToWhatsApp(), 5000);
         }
+      } else if (connection === 'open') {
+        connectionStatus = 'connected';
+        qrCode = null;
+        broadcast({ type: 'status', data: 'connected' });
+        console.log('✅ Conectado ao WhatsApp!');
+      } else if (connection === 'connecting') {
+        connectionStatus = 'connecting';
+        broadcast({ type: 'status', data: 'connecting' });
+        console.log('🔄 Conectando...');
       }
     });
 
     sock.ev.on('creds.update', saveCreds);
 
-    sock.ev.on('messages.upsert', async ({ messages }) => {
-      const msg = messages[0];
-      
-      if (!msg.key.fromMe && msg.message) {
-        const remoteJid = msg.key.remoteJid;
-        
-        if (!remoteJid?.endsWith('@s.whatsapp.net')) return;
-        
-        const phone = remoteJid.replace('@s.whatsapp.net', '');
-        const text = msg.message.conversation || msg.message.extendedTextMessage?.text || '';
+    sock.ev.on('messages.upsert', async ({ messages, type }: any) => {
+      try {
+        if (type !== 'notify') return;
 
-        if (!text) return;
+        const msg = messages[0];
 
-        console.log('📨 Mensagem recebida:', phone, text);
-        // handleIncomingMessage(phone, text);
+        if (!msg.key.fromMe && msg.message && !msg.key.remoteJid.includes('@newsletter')) {
+          const remoteJid = msg.key.remoteJid;
+          const text = msg.message.conversation || msg.message.extendedTextMessage?.text || '';
+
+          if (!text) return;
+
+          if (remoteJid.endsWith('@s.whatsapp.net') || remoteJid.endsWith('@g.us')) {
+            console.log('📨 Mensagem recebida de', remoteJid, ':', text);
+
+            // Processar com NLP
+            const response = await processMessage(text);
+
+            // Enviar resposta
+            await sock.sendMessage(remoteJid, { text: response });
+            console.log('✅ Resposta enviada para', remoteJid);
+
+            // Broadcast para dashboard
+            broadcast({
+              type: 'message',
+              data: {
+                from: remoteJid,
+                text,
+                response,
+                timestamp: Date.now()
+              }
+            });
+          }
+        }
+      } catch (error) {
+        console.log('❌ Erro ao processar mensagem:', error);
       }
     });
 
   } catch (error) {
-    sock = null;
+    console.error('❌ Erro ao conectar WhatsApp:', error);
     connectionStatus = 'disconnected';
-    console.error('❌ Erro ao conectar:', error);
+    sock = null;
   }
-}
-
-function broadcastToClients(message: any) {
-  if (!bunServer) return;
-  try {
-    bunServer.publish('dashboard', JSON.stringify(message));
-  } catch {}
-}
-
-export function getQRCode() {
-  return qrString;
-}
-
-export function getConnectionStatus() {
-  return connectionStatus;
 }
 
 export async function requestPairingCode(phoneNumber: string): Promise<string | null> {
   try {
-    // Se não tem socket, criar primeiro
     if (!sock) {
-      console.log('🔄 Criando socket para pairing...');
-      
-      // Limpar sessão antiga
-      await clearSession();
-      
-      const { state, saveCreds } = await useMultiFileAuthState(SESSION_DIR);
-      
+      const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
+
       sock = makeWASocket({
         auth: {
           creds: state.creds,
@@ -155,57 +136,90 @@ export async function requestPairingCode(phoneNumber: string): Promise<string | 
         printQRInTerminal: false
       });
 
+      sock.ev.on('creds.update', saveCreds);
+
       // Aguardar socket estar pronto
       await new Promise(resolve => setTimeout(resolve, 2000));
-      
-      sock.ev.on('creds.update', saveCreds);
     }
 
-    // Gerar código
-    console.log('📱 Gerando pairing code para:', phoneNumber);
-    const code = await sock.requestPairingCode(phoneNumber);
-    console.log('✅ Código gerado:', code);
-    
-    return code;
-    
+    if (!sock.authState.creds.registered) {
+      const code = await sock.requestPairingCode(phoneNumber);
+      console.log(`✅ Código de pareamento: ${code}`);
+      return code;
+    }
+
+    return null;
   } catch (error) {
-    console.error('❌ Erro ao gerar pairing code:', error);
+    console.error('❌ Erro ao gerar código:', error);
     return null;
   }
 }
 
+export async function sendMessage(to: string, text: string) {
+  if (!sock || connectionStatus !== 'connected') {
+    throw new Error('WhatsApp não conectado');
+  }
+
+  try {
+    const jid = to.includes('@') ? to : `${to}@s.whatsapp.net`;
+    await sock.sendMessage(jid, { text });
+    console.log('✅ Mensagem enviada para', jid);
+    return true;
+  } catch (error) {
+    console.error('❌ Erro ao enviar mensagem:', error);
+    throw error;
+  }
+}
+
 export async function disconnectWhatsApp() {
-  console.log('🛑 Desconectando...');
-  
   if (sock) {
     try {
       await sock.logout();
-    } catch {}
-    sock.end(undefined);
+      sock.end(undefined);
+    } catch (error) {
+      console.error('❌ Erro ao desconectar:', error);
+    }
     sock = null;
   }
-
   connectionStatus = 'disconnected';
-  console.log('✅ Desconectado');
+  qrCode = null;
+  console.log('🛑 WhatsApp desconectado');
 }
 
-export async function restartWhatsApp() {
-  console.log('🔄 Reiniciando...');
-  
-  await disconnectWhatsApp();
-  await clearSession();
-  await new Promise(resolve => setTimeout(resolve, 1000));
-  await connectWhatsApp();
-  
-  console.log('✅ Reiniciado');
+export function getConnectionStatus() {
+  return connectionStatus;
 }
 
-async function clearSession() {
+export function getQRCode() {
+  return qrCode;
+}
+
+async function processMessage(text: string): Promise<string> {
   try {
-    await fs.rm(SESSION_DIR, { recursive: true, force: true });
-    await fs.mkdir(SESSION_DIR, { recursive: true });
-    console.log('🧹 Sessão limpa');
-  } catch {}
+    // Importar NLP engine
+    const { analyzeMessage } = await import('../lib/nlp-engine');
+    const analysis = analyzeMessage(text);
+
+    // Lógica de resposta baseada na intenção
+    const responses: Record<string, string> = {
+      saudacao: 'Olá! 👋 Como posso ajudar você hoje?',
+      agradecimento: 'De nada! Estou aqui para ajudar. 😊',
+      despedida: 'Até logo! Qualquer coisa, estou por aqui. 👋',
+      valores: 'Para informações sobre valores, entre em contato com nossa equipe comercial pelo telefone (XX) XXXX-XXXX',
+      trafego_interesse: 'Temos excelentes soluções de tráfego pago! Posso te enviar mais informações?',
+      social_interesse: 'Gestão de redes sociais é nossa especialidade! Quer saber mais sobre nossos planos?',
+      site_interesse: 'Criamos sites profissionais e modernos. Posso te enviar nosso portfólio?',
+      menu: 'Menu:\n1. Tráfego Pago\n2. Social Media\n3. Sites\n4. Consultoria\n\nDigite o número da opção desejada.',
+      handoff: 'Vou transferir você para um atendente humano. Aguarde um momento...',
+    };
+
+    const response = responses[analysis.intent] || 'Oi, tudo bem? Como posso ajudar?';
+
+    return response;
+  } catch (error) {
+    console.error('❌ Erro ao processar com NLP:', error);
+    return 'Oi, tudo bem? Como posso ajudar?';
+  }
 }
 
 export { sock };
