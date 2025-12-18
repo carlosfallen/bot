@@ -24,50 +24,17 @@ const question = (text) => new Promise((resolve) => rl.question(text, resolve));
 let sock = null;
 let db = null;
 let api = null;
-let botConfig = {};
-
-async function initialize() {
-    console.log('\n' + '='.repeat(60));
-    console.log('   WHATSAPP BOT - SISTEMA COMPLETO');
-    console.log('='.repeat(60) + '\n');
-
-    // Conectar ao WhatsApp PRIMEIRO
-    await connectToWhatsApp();
-}
-
-async function initializeBackend() {
-    // Inicializar banco de dados
-    console.log('\n📦 Conectando ao banco de dados...');
-    db = new CloudflareD1({
-        accountId: config.cloudflare.accountId,
-        databaseId: config.cloudflare.databaseId,
-        apiToken: config.cloudflare.apiToken
-    });
-
-    // Carregar configurações do banco
-    try {
-        botConfig = await db.getAllConfig();
-        console.log('✅ Banco de dados conectado');
-        console.log(`✅ ${Object.keys(botConfig).length} configurações carregadas`);
-    } catch (error) {
-        console.error('❌ Erro ao conectar ao banco:', error.message);
-        console.log('💡 Execute primeiro: npm run init-db');
-        // Não encerrar o processo, continuar sem DB
-        botConfig = {
-            bot_enabled: true,
-            respond_to_groups: false,
-            respond_to_channels: false,
-            auto_save_leads: false,
-            business_hours_only: false,
-            away_message: 'No momento estamos fora do horário de atendimento.'
-        };
-    }
-
-    // Inicializar API
-    console.log('🌐 Iniciando servidor web...');
-    api = new BotAPI(db, { getSocket: () => sock });
-    api.start();
-}
+let botConfig = {
+    bot_enabled: true,
+    respond_to_groups: false,
+    respond_to_channels: false,
+    auto_save_leads: true,
+    business_hours_only: false,
+    business_hours_start: '09:00',
+    business_hours_end: '18:00',
+    away_message: 'No momento estamos fora do horário de atendimento.'
+};
+let backendInitialized = false;
 
 async function connectToWhatsApp() {
     const { state, saveCreds } = await useMultiFileAuthState('auth_info');
@@ -83,15 +50,13 @@ async function connectToWhatsApp() {
         markOnlineOnConnect: false
     });
 
-    // Pairing code IMEDIATAMENTE após criar socket (igual ao código que funciona)
     if (!sock.authState.creds.registered) {
         const phoneNumber = await question('Digite seu número do WhatsApp (com DDI, ex: 5511999999999): ');
         const code = await sock.requestPairingCode(phoneNumber);
         console.log(`Código de pareamento: ${code}`);
     }
 
-    // Event listeners DEPOIS do pairing code
-    sock.ev.on('connection.update', async (update) => {
+    sock.ev.on('connection.update', (update) => {
         const { connection, lastDisconnect } = update;
 
         if (connection === 'close') {
@@ -101,16 +66,13 @@ async function connectToWhatsApp() {
                 connectToWhatsApp();
             }
         } else if (connection === 'open') {
-            console.log('\n━'.repeat(50));
-            console.log('✅ CONECTADO AO WHATSAPP!');
-            console.log('━'.repeat(50));
+            console.log('✅ Conectado ao WhatsApp!');
 
-            // Inicializar backend DEPOIS de conectar ao WhatsApp
-            if (!db) {
-                await initializeBackend();
+            // Inicializar backend APENAS uma vez
+            if (!backendInitialized) {
+                backendInitialized = true;
+                initializeBackend();
             }
-
-            console.log('\n🤖 Bot rodando... Aguardando mensagens.\n');
         }
     });
 
@@ -129,6 +91,38 @@ async function connectToWhatsApp() {
             console.log('❌ Erro ao processar mensagem:', error.message);
         }
     });
+}
+
+async function initializeBackend() {
+    try {
+        // Inicializar banco de dados
+        console.log('\n📦 Conectando ao banco de dados...');
+        db = new CloudflareD1({
+            accountId: config.cloudflare.accountId,
+            databaseId: config.cloudflare.databaseId,
+            apiToken: config.cloudflare.apiToken
+        });
+
+        // Carregar configurações do banco
+        botConfig = await db.getAllConfig();
+        console.log('✅ Banco de dados conectado');
+        console.log(`✅ ${Object.keys(botConfig).length} configurações carregadas`);
+    } catch (error) {
+        console.error('⚠️  Erro ao conectar banco:', error.message);
+        console.log('⚠️  Continuando sem banco de dados...');
+    }
+
+    try {
+        // Inicializar API
+        console.log('🌐 Iniciando servidor web...');
+        api = new BotAPI(db, { getSocket: () => sock });
+        api.start();
+    } catch (error) {
+        console.error('⚠️  Erro ao iniciar API:', error.message);
+        console.log('⚠️  Continuando sem dashboard...');
+    }
+
+    console.log('\n🤖 Bot pronto! Aguardando mensagens...\n');
 }
 
 async function handleMessage(msg) {
@@ -168,118 +162,96 @@ async function handleMessage(msg) {
     const phone = remoteJid.split('@')[0];
 
     try {
-        // Salvar ou atualizar lead
+        // Salvar ou atualizar lead (somente se DB disponível)
         let leadId = null;
-        if (botConfig.auto_save_leads && chatType === 'private') {
-            leadId = await db.saveLead({
-                phone,
-                name: null,
-                email: null,
-                company: null,
-                tags: []
-            });
-
-            await db.incrementStat('new_leads');
+        if (db && botConfig.auto_save_leads && chatType === 'private') {
+            try {
+                leadId = await db.saveLead({
+                    phone,
+                    name: null,
+                    email: null,
+                    company: null,
+                    tags: []
+                });
+                await db.incrementStat('new_leads');
+            } catch (error) {
+                console.log('   ⚠️  Erro ao salvar lead:', error.message);
+            }
         }
 
-        // Obter ou criar conversa
-        const conversation = await db.getOrCreateConversation(remoteJid, leadId, chatType);
+        // Obter ou criar conversa (somente se DB disponível)
+        let conversation = null;
+        if (db) {
+            try {
+                conversation = await db.getOrCreateConversation(remoteJid, leadId, chatType);
 
-        // Verificar se bot está ativo para esta conversa
-        if (!conversation.is_bot_active) {
-            console.log('   ⏸️  Bot desativado para esta conversa');
-
-            // Salvar mensagem mesmo sem responder
-            await db.saveMessage(conversation.id, {
-                messageId: msg.key.id,
-                direction: 'incoming',
-                text: messageText,
-                intent: null,
-                confidence: 0,
-                entities: {},
-                isBot: false
-            });
-
-            return;
+                // Verificar se bot está ativo para esta conversa
+                if (!conversation.is_bot_active) {
+                    console.log('   ⏸️  Bot desativado para esta conversa');
+                    return;
+                }
+            } catch (error) {
+                console.log('   ⚠️  Erro ao buscar conversa:', error.message);
+            }
         }
 
         // Verificar horário comercial
         if (botConfig.business_hours_only && !isBusinessHours()) {
             const response = botConfig.away_message;
-
             await sock.sendMessage(remoteJid, { text: response });
-
-            console.log(`   🕐 Fora do horário: ${response}\n`);
-
-            // Salvar mensagens
-            await db.saveMessage(conversation.id, {
-                messageId: msg.key.id,
-                direction: 'incoming',
-                text: messageText,
-                intent: 'away_hours',
-                confidence: 1,
-                entities: {},
-                isBot: false
-            });
-
-            await db.saveMessage(conversation.id, {
-                messageId: null,
-                direction: 'outgoing',
-                text: response,
-                intent: 'away_hours',
-                confidence: 1,
-                entities: {},
-                isBot: true
-            });
-
-            await db.incrementStat('bot_responses');
-
+            console.log(`   🕐 Fora do horário: ${response}`);
             return;
         }
 
         // Processar com NLP
         const nlpResult = await nlpAnalyzer.analyze(messageText, remoteJid);
-
         console.log(`   🧠 Intent: ${nlpResult.intent} (${(nlpResult.confidence * 100).toFixed(1)}%)`);
 
-        // Salvar mensagem recebida
-        await db.saveMessage(conversation.id, {
-            messageId: msg.key.id,
-            direction: 'incoming',
-            text: messageText,
-            intent: nlpResult.intent,
-            confidence: nlpResult.confidence,
-            entities: nlpResult.entities,
-            isBot: false
-        });
-
-        await db.incrementStat('total_messages');
+        // Salvar mensagem recebida (somente se DB disponível)
+        if (db && conversation) {
+            try {
+                await db.saveMessage(conversation.id, {
+                    messageId: msg.key.id,
+                    direction: 'incoming',
+                    text: messageText,
+                    intent: nlpResult.intent,
+                    confidence: nlpResult.confidence,
+                    entities: nlpResult.entities,
+                    isBot: false
+                });
+                await db.incrementStat('total_messages');
+            } catch (error) {
+                console.log('   ⚠️  Erro ao salvar mensagem:', error.message);
+            }
+        }
 
         // Enviar resposta
         const response = nlpResult.response;
-
         await sock.sendMessage(remoteJid, { text: response });
+        console.log(`   ✅ Resposta enviada`);
 
-        console.log(`   ✅ Resposta: ${response.substring(0, 50)}...`);
+        // Salvar resposta do bot (somente se DB disponível)
+        if (db && conversation) {
+            try {
+                await db.saveMessage(conversation.id, {
+                    messageId: null,
+                    direction: 'outgoing',
+                    text: response,
+                    intent: nlpResult.intent,
+                    confidence: nlpResult.confidence,
+                    entities: nlpResult.entities,
+                    isBot: true
+                });
+                await db.incrementStat('bot_responses');
+                await db.incrementStat('total_conversations');
+            } catch (error) {
+                console.log('   ⚠️  Erro ao salvar resposta:', error.message);
+            }
+        }
 
-        // Salvar resposta do bot
-        await db.saveMessage(conversation.id, {
-            messageId: null,
-            direction: 'outgoing',
-            text: response,
-            intent: nlpResult.intent,
-            confidence: nlpResult.confidence,
-            entities: nlpResult.entities,
-            isBot: true
-        });
-
-        await db.incrementStat('bot_responses');
-        await db.incrementStat('total_conversations');
-
-        // Se deve coletar dados do lead
-        if (nlpResult.shouldCollectData && Object.keys(nlpResult.entities).length > 0) {
-            // Atualizar lead com entidades extraídas
-            if (leadId) {
+        // Atualizar lead com entidades extraídas (somente se DB disponível)
+        if (db && leadId && nlpResult.shouldCollectData && Object.keys(nlpResult.entities).length > 0) {
+            try {
                 await db.saveLead({
                     phone,
                     name: nlpResult.entities.name || null,
@@ -287,8 +259,9 @@ async function handleMessage(msg) {
                     company: null,
                     tags: []
                 });
-
-                console.log('   💾 Lead atualizado com dados extraídos');
+                console.log('   💾 Lead atualizado');
+            } catch (error) {
+                console.log('   ⚠️  Erro ao atualizar lead:', error.message);
             }
         }
 
@@ -313,16 +286,4 @@ function isBusinessHours() {
 }
 
 // Iniciar bot
-initialize().catch((error) => {
-    console.error('\n❌ Erro fatal:', error.message);
-    process.exit(1);
-});
-
-// Tratamento de erros
-process.on('uncaughtException', (error) => {
-    console.error('❌ Erro não capturado:', error.message);
-});
-
-process.on('unhandledRejection', (error) => {
-    console.error('❌ Promise rejeitada:', error.message);
-});
+connectToWhatsApp();
