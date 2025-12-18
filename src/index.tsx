@@ -150,10 +150,16 @@ const server = Bun.serve({
       );
     }
 
-    // WebSocket upgrade
-    const success = server.upgrade(req);
-    if (success) {
-      return; // retornar nada quando upgrade for bem-sucedido
+    // WebSocket endpoint dedicado
+    if (pathname === '/ws') {
+      console.log('🔌 Tentando upgrade WebSocket...');
+      const upgraded = server.upgrade(req);
+      if (upgraded) {
+        console.log('✅ WebSocket upgrade bem-sucedido');
+        return;
+      }
+      console.log('❌ WebSocket upgrade falhou');
+      return new Response('Upgrade failed', { status: 500 });
     }
 
     return new Response('Not Found', { status: 404 });
@@ -365,7 +371,8 @@ function getIndexHTML() {
 
     function connectWebSocket() {
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const wsUrl = protocol + '//' + window.location.host;
+      const wsUrl = protocol + '//' + window.location.host + '/ws';
+      console.log('Conectando WebSocket em:', wsUrl);
       ws = new WebSocket(wsUrl);
 
       ws.onopen = () => {
