@@ -24,6 +24,8 @@ class WhatsAppBot {
         this.nlp = nlpAnalyzer;
         this.db = null;
         this.api = null;
+        this.isConnecting = false;
+        this.isFirstConnection = true;
         this.config = {
             bot_enabled: true,
             respond_to_groups: false,
@@ -36,16 +38,16 @@ class WhatsAppBot {
     async initialize() {
         console.log('\n=== WHATSAPP BOT ===\n');
 
-        // CONECTAR PRIMEIRO
-        await this.connectToWhatsApp();
-
-        // DEPOIS carregar banco e API
+        // Inicializar database e API ANTES de conectar
         await this.initializeDatabase();
         await this.initializeAPI();
+
+        // Conectar ao WhatsApp por último
+        await this.connectToWhatsApp();
     }
 
     async initializeDatabase() {
-        console.log('\n📦 Conectando ao banco...');
+        console.log('📦 Conectando ao banco...');
         
         try {
             this.db = new CloudflareD1({
@@ -72,56 +74,91 @@ class WhatsAppBot {
     }
 
     async connectToWhatsApp() {
-        const { state, saveCreds } = await useMultiFileAuthState('auth_info');
-
-        this.sock = makeWASocket({
-            auth: {
-                creds: state.creds,
-                keys: makeCacheableSignalKeyStore(state.keys, logger)
-            },
-            logger,
-            printQRInTerminal: false,
-            syncFullHistory: false,
-            markOnlineOnConnect: false
-        });
-
-        if (!this.sock.authState.creds.registered) {
-            const phoneNumber = await question('Digite seu número com DDI (ex: 5589994333316): ');
-            const code = await this.sock.requestPairingCode(phoneNumber);
-            console.log(`\n✅ CÓDIGO: ${code}\n`);
+        // Evitar múltiplas tentativas simultâneas
+        if (this.isConnecting) {
+            console.log('⚠️  Já há uma tentativa de conexão em andamento...');
+            return;
         }
 
-        this.sock.ev.on('connection.update', (update) => {
-            const { connection, lastDisconnect } = update;
+        this.isConnecting = true;
 
-            if (connection === 'close') {
-                const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
-                console.log('Conexão fechada. Reconectando:', shouldReconnect);
-                if (shouldReconnect) {
-                    setTimeout(() => this.connectToWhatsApp(), 3000);
+        try {
+            const { state, saveCreds } = await useMultiFileAuthState('auth_info');
+
+            this.sock = makeWASocket({
+                auth: {
+                    creds: state.creds,
+                    keys: makeCacheableSignalKeyStore(state.keys, logger)
+                },
+                logger,
+                printQRInTerminal: false,
+                syncFullHistory: false,
+                markOnlineOnConnect: false
+            });
+
+            // Solicitar código apenas na primeira conexão E se não estiver registrado
+            if (this.isFirstConnection && !this.sock.authState.creds.registered) {
+                const phoneNumber = await question('Digite seu número com DDI (ex: 5589994333316): ');
+                const code = await this.sock.requestPairingCode(phoneNumber);
+                console.log(`\n✅ CÓDIGO: ${code}\n`);
+            }
+
+            this.sock.ev.on('connection.update', async (update) => {
+                const { connection, lastDisconnect } = update;
+
+                if (connection === 'close') {
+                    this.isConnecting = false;
+                    
+                    const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
+                    
+                    if (shouldReconnect) {
+                        console.log('⚠️  Conexão fechada. Reconectando em 3 segundos...');
+                        setTimeout(() => {
+                            this.isFirstConnection = false; // Não solicitar código novamente
+                            this.connectToWhatsApp();
+                        }, 3000);
+                    } else {
+                        console.log('❌ Desconectado. Faça login novamente.');
+                        process.exit(0);
+                    }
+                } else if (connection === 'open') {
+                    console.log('\n✅ CONECTADO!\n');
+                    this.isConnecting = false;
+                    this.isFirstConnection = false;
+                    
+                    // Fechar readline apenas após primeira conexão bem-sucedida
+                    if (rl && !rl.closed) {
+                        rl.close();
+                    }
                 }
-            } else if (connection === 'open') {
-                console.log('\n✅ CONECTADO!\n');
-                rl.close();
-            }
-        });
+            });
 
-        this.sock.ev.on('creds.update', saveCreds);
+            this.sock.ev.on('creds.update', saveCreds);
 
-        this.sock.ev.on('messages.upsert', async ({ messages, type }) => {
-            try {
-                if (type !== 'notify') return;
+            this.sock.ev.on('messages.upsert', async ({ messages, type }) => {
+                try {
+                    if (type !== 'notify') return;
 
-                const msg = messages[0];
+                    const msg = messages[0];
 
-                if (msg.key.fromMe || msg.key.remoteJid.includes('@newsletter')) return;
+                    if (msg.key.fromMe || msg.key.remoteJid.includes('@newsletter')) return;
 
-                await this.handleMessage(msg);
+                    await this.handleMessage(msg);
 
-            } catch (error) {
-                console.error('❌ Erro:', error.message);
-            }
-        });
+                } catch (error) {
+                    console.error('❌ Erro ao processar mensagem:', error.message);
+                }
+            });
+
+        } catch (error) {
+            this.isConnecting = false;
+            console.error('❌ Erro ao conectar:', error.message);
+            
+            // Tentar reconectar após erro
+            setTimeout(() => {
+                this.connectToWhatsApp();
+            }, 5000);
+        }
     }
 
     async handleMessage(msg) {
