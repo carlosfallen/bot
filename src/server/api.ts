@@ -7,6 +7,7 @@ import {
   db 
 } from './db';
 import { getQRCode, getConnectionStatus } from './whatsapp';
+import { disconnectWhatsApp, restartWhatsApp, requestPairingCode } from './whatsapp';
 
 function corsHeaders() {
   return {
@@ -37,6 +38,47 @@ export async function handler(req: Request, server: any): Promise<Response> {
   if (req.method === 'OPTIONS') {
     return new Response(null, { status: 200, headers: corsHeaders() });
   }
+
+  if (pathname === '/api/pairing-code' && req.method === 'POST') {
+  try {
+    const { phone } = await req.json();
+    
+    if (!phone || phone.length < 10) {
+      return errorResponse('Número inválido', 400);
+    }
+
+    const code = await requestPairingCode(phone);
+    
+    if (code) {
+      return jsonResponse({ success: true, code });
+    } else {
+      return errorResponse('Erro ao gerar código');
+    }
+  } catch (error) {
+    console.error('Erro ao gerar pairing code:', error);
+    return errorResponse('Erro interno');
+  }
+}
+
+if (pathname === '/api/disconnect' && req.method === 'POST') {
+  try {
+    await disconnectWhatsApp();
+    return jsonResponse({ success: true, message: 'Desconectado com sucesso' });
+  } catch (error) {
+    console.error('Erro ao desconectar:', error);
+    return errorResponse('Erro ao desconectar');
+  }
+}
+
+if (pathname === '/api/restart' && req.method === 'POST') {
+  try {
+    await restartWhatsApp();
+    return jsonResponse({ success: true, message: 'Reiniciado com sucesso' });
+  } catch (error) {
+    console.error('Erro ao reiniciar:', error);
+    return errorResponse('Erro ao reiniciar');
+  }
+}
 
   if (pathname === '/api/health') {
     return jsonResponse({
