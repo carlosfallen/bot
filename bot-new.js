@@ -24,36 +24,51 @@ class WhatsAppBot {
         this.nlp = nlpAnalyzer;
         this.db = null;
         this.api = null;
-        this.config = {};
+        this.config = {
+            bot_enabled: true,
+            respond_to_groups: false,
+            respond_to_channels: false,
+            auto_save_leads: true,
+            business_hours_only: false
+        };
     }
 
     async initialize() {
-        console.log('\n' + '='.repeat(60));
-        console.log('   WHATSAPP BOT - SISTEMA COMPLETO');
-        console.log('='.repeat(60) + '\n');
+        console.log('\n=== WHATSAPP BOT ===\n');
 
-        console.log('📦 Conectando ao banco de dados...');
-        this.db = new CloudflareD1({
-            accountId: config.cloudflare.accountId,
-            databaseId: config.cloudflare.databaseId,
-            apiToken: config.cloudflare.apiToken
-        });
-
-        try {
-            this.config = await this.db.getAllConfig();
-            console.log('✅ Banco de dados conectado');
-            console.log(`✅ ${Object.keys(this.config).length} configurações carregadas\n`);
-        } catch (error) {
-            console.error('❌ Erro ao conectar ao banco:', error.message);
-            console.log('\n💡 Execute primeiro: wrangler d1 execute bot --file=src/database/schema.sql --remote\n');
-            process.exit(1);
-        }
-
-        console.log('🌐 Iniciando servidor web...');
-        this.api = new BotAPI(this.db, this);
-        this.api.start();
-
+        // CONECTAR PRIMEIRO
         await this.connectToWhatsApp();
+
+        // DEPOIS carregar banco e API
+        await this.initializeDatabase();
+        await this.initializeAPI();
+    }
+
+    async initializeDatabase() {
+        console.log('\n📦 Conectando ao banco...');
+        
+        try {
+            this.db = new CloudflareD1({
+                accountId: config.cloudflare.accountId,
+                databaseId: config.cloudflare.databaseId,
+                apiToken: config.cloudflare.apiToken
+            });
+
+            this.config = await this.db.getAllConfig();
+            console.log('✅ Banco conectado\n');
+        } catch (error) {
+            console.log('⚠️  Banco não disponível, usando configs padrão\n');
+        }
+    }
+
+    async initializeAPI() {
+        try {
+            console.log('🌐 Iniciando API...');
+            this.api = new BotAPI(this.db, this);
+            this.api.start();
+        } catch (error) {
+            console.log('⚠️  API não iniciada:', error.message);
+        }
     }
 
     async connectToWhatsApp() {
@@ -74,9 +89,6 @@ class WhatsAppBot {
             const phoneNumber = await question('Digite seu número com DDI (ex: 5589994333316): ');
             const code = await this.sock.requestPairingCode(phoneNumber);
             console.log(`\n✅ CÓDIGO: ${code}\n`);
-            console.log('📱 Abra WhatsApp > Dispositivos Conectados');
-            console.log('   > Conectar com número de telefone');
-            console.log(`   > Digite: ${code}\n`);
         }
 
         this.sock.ev.on('connection.update', (update) => {
@@ -86,11 +98,10 @@ class WhatsAppBot {
                 const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
                 console.log('Conexão fechada. Reconectando:', shouldReconnect);
                 if (shouldReconnect) {
-                    this.connectToWhatsApp();
+                    setTimeout(() => this.connectToWhatsApp(), 3000);
                 }
             } else if (connection === 'open') {
-                console.log('\n✅ CONECTADO AO WHATSAPP!');
-                console.log('🤖 Bot rodando... Aguardando mensagens.\n');
+                console.log('\n✅ CONECTADO!\n');
                 rl.close();
             }
         });
@@ -108,158 +119,60 @@ class WhatsAppBot {
                 await this.handleMessage(msg);
 
             } catch (error) {
-                console.error('❌ Erro ao processar mensagem:', error.message);
+                console.error('❌ Erro:', error.message);
             }
         });
     }
 
     async handleMessage(msg) {
         const remoteJid = msg.key.remoteJid;
-        const messageText = msg.message?.conversation ||
-                           msg.message?.extendedTextMessage?.text ||
-                           '';
+        const messageText = msg.message?.conversation || msg.message?.extendedTextMessage?.text || '';
 
         if (!messageText) return;
 
-        const chatType = remoteJid.endsWith('@g.us') ? 'group' :
-                        remoteJid.endsWith('@newsletter') ? 'channel' :
-                        'private';
+        const chatType = remoteJid.endsWith('@g.us') ? 'group' : 'private';
 
-        console.log(`\n📨 Mensagem ${chatType} de ${remoteJid}`);
-        console.log(`   Texto: ${messageText}`);
+        console.log(`\n📨 ${chatType}: ${messageText.substring(0, 50)}`);
 
-        if (!this.config.bot_enabled) {
-            console.log('   ⏸️  Bot desativado globalmente');
+        if (!this.config.bot_enabled || (chatType === 'group' && !this.config.respond_to_groups)) {
             return;
         }
-
-        if (chatType === 'group' && !this.config.respond_to_groups) {
-            console.log('   ⏸️  Bot não responde em grupos');
-            return;
-        }
-
-        if (chatType === 'channel' && !this.config.respond_to_channels) {
-            console.log('   ⏸️  Bot não responde em canais');
-            return;
-        }
-
-        const phone = remoteJid.split('@')[0];
 
         try {
-            let leadId = null;
-            if (this.config.auto_save_leads && chatType === 'private') {
-                leadId = await this.db.saveLead({
-                    phone,
-                    name: null,
-                    email: null,
-                    company: null,
-                    tags: []
-                });
+            const nlpResult = await this.nlp.analyze(messageText, remoteJid);
+            
+            await this.sock.sendMessage(remoteJid, { text: nlpResult.response });
 
-                await this.db.incrementStat('new_leads');
-            }
+            console.log(`✅ Enviado: ${nlpResult.response.substring(0, 50)}...\n`);
 
-            const conversation = await this.db.getOrCreateConversation(remoteJid, leadId, chatType);
-
-            if (!conversation.is_bot_active) {
-                console.log('   ⏸️  Bot desativado para esta conversa');
-
+            if (this.db) {
+                const phone = remoteJid.split('@')[0];
+                const leadId = await this.db.saveLead({ phone, name: null, email: null, company: null, tags: [] });
+                const conversation = await this.db.getOrCreateConversation(remoteJid, leadId, chatType);
+                
                 await this.db.saveMessage(conversation.id, {
                     messageId: msg.key.id,
                     direction: 'incoming',
                     text: messageText,
-                    intent: null,
-                    confidence: 0,
-                    entities: {},
-                    isBot: false
-                });
-
-                return;
-            }
-
-            if (this.config.business_hours_only && !this.isBusinessHours()) {
-                const response = this.config.away_message;
-
-                await this.sock.sendMessage(remoteJid, { text: response });
-
-                console.log(`   🕐 Fora do horário: ${response}\n`);
-
-                await this.db.saveMessage(conversation.id, {
-                    messageId: msg.key.id,
-                    direction: 'incoming',
-                    text: messageText,
-                    intent: 'away_hours',
-                    confidence: 1,
-                    entities: {},
+                    intent: nlpResult.intent,
+                    confidence: nlpResult.confidence,
+                    entities: nlpResult.entities,
                     isBot: false
                 });
 
                 await this.db.saveMessage(conversation.id, {
                     messageId: null,
                     direction: 'outgoing',
-                    text: response,
-                    intent: 'away_hours',
-                    confidence: 1,
-                    entities: {},
+                    text: nlpResult.response,
+                    intent: nlpResult.intent,
+                    confidence: nlpResult.confidence,
+                    entities: nlpResult.entities,
                     isBot: true
                 });
-
-                await this.db.incrementStat('bot_responses');
-
-                return;
-            }
-
-            const nlpResult = await this.nlp.analyze(messageText, remoteJid);
-
-            console.log(`   🧠 Intent: ${nlpResult.intent} (${(nlpResult.confidence * 100).toFixed(1)}%)`);
-
-            await this.db.saveMessage(conversation.id, {
-                messageId: msg.key.id,
-                direction: 'incoming',
-                text: messageText,
-                intent: nlpResult.intent,
-                confidence: nlpResult.confidence,
-                entities: nlpResult.entities,
-                isBot: false
-            });
-
-            await this.db.incrementStat('total_messages');
-
-            const response = nlpResult.response;
-
-            await this.sock.sendMessage(remoteJid, { text: response });
-
-            console.log(`   ✅ Resposta: ${response.substring(0, 50)}...\n`);
-
-            await this.db.saveMessage(conversation.id, {
-                messageId: null,
-                direction: 'outgoing',
-                text: response,
-                intent: nlpResult.intent,
-                confidence: nlpResult.confidence,
-                entities: nlpResult.entities,
-                isBot: true
-            });
-
-            await this.db.incrementStat('bot_responses');
-            await this.db.incrementStat('total_conversations');
-
-            if (nlpResult.shouldCollectData && Object.keys(nlpResult.entities).length > 0) {
-                if (leadId) {
-                    await this.db.saveLead({
-                        phone,
-                        name: nlpResult.entities.name || null,
-                        email: nlpResult.entities.email || null,
-                        company: null,
-                        tags: []
-                    });
-
-                    console.log('   💾 Lead atualizado com dados extraídos');
-                }
             }
 
         } catch (error) {
-            console.error('   ❌ Erro ao processar:', error.message);
+            console.error('❌ Erro ao processar:', error.message);
         }
     }
 
@@ -284,12 +197,4 @@ const bot = new WhatsAppBot();
 bot.initialize().catch((error) => {
     console.error('\n❌ Erro fatal:', error.message);
     process.exit(1);
-});
-
-process.on('uncaughtException', (error) => {
-    console.error('❌ Erro não capturado:', error.message);
-});
-
-process.on('unhandledRejection', (error) => {
-    console.error('❌ Promise rejeitada:', error.message);
 });
