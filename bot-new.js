@@ -3,6 +3,7 @@ require('dotenv').config();
 const { default: makeWASocket, DisconnectReason, useMultiFileAuthState, makeCacheableSignalKeyStore } = require('@whiskeysockets/baileys');
 const readline = require('readline');
 const P = require('pino');
+const fs = require('fs');
 
 const nlpAnalyzer = require('./src/nlp/analyzer.js');
 const CloudflareD1 = require('./src/database/d1.js');
@@ -30,9 +31,7 @@ class WhatsAppBot {
         this.db = null;
         this.api = null;
         this.isConnecting = false;
-        this.isFirstConnection = true;
-        this.connectionAttempts = 0;
-        this.maxAttempts = 3;
+        this.phoneNumber = null;
         this.config = {
             bot_enabled: true,
             respond_to_groups: false,
@@ -47,7 +46,39 @@ class WhatsAppBot {
 
         await this.initializeDatabase();
         await this.initializeAPI();
+        
+        // Verificar se já tem sessão salva
+        const hasSession = await this.checkExistingSession();
+        
+        if (!hasSession) {
+            console.log('📱 Primeira conexão detectada!\n');
+            this.phoneNumber = await question('Digite seu número com DDI (ex: 5589994333316): ');
+            this.phoneNumber = this.phoneNumber.replace(/\D/g, '');
+            console.log(`\n✅ Número configurado: ${this.phoneNumber}\n`);
+        }
+        
         await this.connectToWhatsApp();
+    }
+
+    async checkExistingSession() {
+        try {
+            const authPath = './auth_info';
+            if (!fs.existsSync(authPath)) {
+                return false;
+            }
+            
+            const files = fs.readdirSync(authPath);
+            const hasCreds = files.some(f => f === 'creds.json');
+            
+            if (hasCreds) {
+                console.log('✅ Sessão existente encontrada!\n');
+                return true;
+            }
+            
+            return false;
+        } catch (error) {
+            return false;
+        }
     }
 
     async initializeDatabase() {
@@ -79,7 +110,6 @@ class WhatsAppBot {
 
     async connectToWhatsApp() {
         if (this.isConnecting) {
-            console.log('⚠️  Já há uma tentativa de conexão em andamento...');
             return;
         }
 
@@ -88,7 +118,10 @@ class WhatsAppBot {
         try {
             const { state, saveCreds } = await useMultiFileAuthState('auth_info');
 
-            // Criar o socket
+            const needsPairing = !state.creds.registered;
+
+            console.log('🔌 Criando conexão WebSocket...\n');
+
             this.sock = makeWASocket({
                 auth: {
                     creds: state.creds,
@@ -96,122 +129,137 @@ class WhatsAppBot {
                 },
                 logger,
                 printQRInTerminal: false,
+                browser: ['Bot WhatsApp', 'Chrome', '10.0'],
                 syncFullHistory: false,
                 markOnlineOnConnect: false,
-                connectTimeoutMs: 60000, // 60 segundos de timeout
+                connectTimeoutMs: 60000,
                 defaultQueryTimeoutMs: 60000,
-                keepAliveIntervalMs: 30000
+                keepAliveIntervalMs: 10000,
+                emitOwnEvents: false,
+                getMessage: async () => undefined
             });
 
-            // Configurar eventos ANTES de solicitar o código
             this.setupEventHandlers(saveCreds);
 
-            // Aguardar um pouco para o socket estabilizar
-            await new Promise(resolve => setTimeout(resolve, 2000));
-
-            // Solicitar código apenas na primeira vez e se não registrado
-            if (this.isFirstConnection && !state.creds.registered) {
-                console.log('\n⚠️  Você tem 60 segundos para inserir o código no WhatsApp!\n');
+            // Se precisa parear E temos o número, solicitar código
+            if (needsPairing && this.phoneNumber) {
+                console.log('⏳ Aguardando conexão estabilizar...\n');
                 
-                const phoneNumber = await question('Digite seu número com DDI (ex: 5589994333316): ');
-                
-                try {
-                    const code = await this.sock.requestPairingCode(phoneNumber.replace(/\D/g, ''));
-                    console.log(`\n✅ CÓDIGO DE PAREAMENTO: ${code}`);
-                    console.log('📱 Abra o WhatsApp > Aparelhos conectados > Conectar aparelho');
-                    console.log('📝 Digite o código acima\n');
-                    console.log('⏳ Aguardando conexão...\n');
-                } catch (error) {
-                    console.error('❌ Erro ao solicitar código:', error.message);
-                    this.isConnecting = false;
+                // Aguardar o evento 'open' ou timeout
+                await new Promise((resolve, reject) => {
+                    let resolved = false;
                     
-                    // Tentar novamente
-                    if (this.connectionAttempts < this.maxAttempts) {
-                        this.connectionAttempts++;
-                        console.log(`\n🔄 Tentativa ${this.connectionAttempts}/${this.maxAttempts}...\n`);
-                        setTimeout(() => this.connectToWhatsApp(), 3000);
-                    } else {
-                        console.log('\n❌ Máximo de tentativas atingido. Reinicie o bot.\n');
-                        process.exit(1);
-                    }
-                }
+                    const timeout = setTimeout(() => {
+                        if (!resolved) {
+                            resolved = true;
+                            reject(new Error('Timeout aguardando conexão'));
+                        }
+                    }, 20000);
+                    
+                    const checkConnection = () => {
+                        if (this.sock.ws?.readyState === 1) { // OPEN
+                            if (!resolved) {
+                                resolved = true;
+                                clearTimeout(timeout);
+                                resolve();
+                            }
+                        } else {
+                            setTimeout(checkConnection, 500);
+                        }
+                    };
+                    
+                    checkConnection();
+                });
+                
+                console.log('✅ Conexão estabilizada! Solicitando código...\n');
+                
+                const code = await this.sock.requestPairingCode(this.phoneNumber);
+                
+                console.log('╔════════════════════════════════╗');
+                console.log(`║  CÓDIGO: ${code}  ║`);
+                console.log('╚════════════════════════════════╝\n');
+                console.log('📱 No seu WhatsApp:');
+                console.log('   1. Abra o WhatsApp');
+                console.log('   2. Toque em ⋮ (menu)');
+                console.log('   3. Aparelhos conectados');
+                console.log('   4. Conectar aparelho');
+                console.log(`   5. Digite: ${code}\n`);
+                console.log('⏳ Aguardando pareamento...\n');
             }
 
         } catch (error) {
             this.isConnecting = false;
-            console.error('❌ Erro ao conectar:', error.message);
+            console.error('❌ Erro na conexão:', error.message);
             
-            if (this.connectionAttempts < this.maxAttempts) {
-                this.connectionAttempts++;
-                console.log(`\n🔄 Nova tentativa em 5 segundos... (${this.connectionAttempts}/${this.maxAttempts})\n`);
-                setTimeout(() => this.connectToWhatsApp(), 5000);
-            } else {
-                console.log('\n❌ Não foi possível conectar após várias tentativas.\n');
-                process.exit(1);
+            if (error.message.includes('Timeout')) {
+                console.log('\n💡 DICA: Problemas de conexão podem ser:');
+                console.log('   • Firewall bloqueando portas');
+                console.log('   • Internet instável');
+                console.log('   • Muitas tentativas recentes\n');
+                console.log('Tente novamente em 1 minuto...\n');
             }
+            
+            console.log('🔄 Tentando reconectar em 10 segundos...\n');
+            setTimeout(() => this.connectToWhatsApp(), 10000);
         }
     }
 
     setupEventHandlers(saveCreds) {
         this.sock.ev.on('connection.update', async (update) => {
-            const { connection, lastDisconnect, qr } = update;
+            const { connection, lastDisconnect } = update;
 
-            if (connection === 'close') {
-                this.isConnecting = false;
-                
-                const statusCode = lastDisconnect?.error?.output?.statusCode;
-                const errorMsg = lastDisconnect?.error?.message || 'Desconhecido';
-                
-                console.log(`\n⚠️  Conexão fechada.`);
-                console.log(`   Status: ${statusCode}`);
-                console.log(`   Erro: ${errorMsg}`);
-                
-                // 405 = método não permitido / muitos dispositivos / sessão inválida
-                if (statusCode === 405) {
-                    console.log('\n❌ ERRO 405 - Possíveis causas:');
-                    console.log('   1. Você já tem 4 dispositivos conectados no WhatsApp');
-                    console.log('   2. A sessão está corrompida');
-                    console.log('   3. O número foi banido temporariamente\n');
-                    console.log('💡 SOLUÇÃO:');
-                    console.log('   1. Abra o WhatsApp e desconecte algum dispositivo');
-                    console.log('   2. OU delete a pasta "auth_info" e tente novamente:');
-                    console.log('      rm -rf auth_info && npm start\n');
-                    process.exit(1);
-                }
-                
-                const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
-                
-                if (shouldReconnect && this.connectionAttempts < this.maxAttempts) {
-                    this.connectionAttempts++;
-                    console.log(`🔄 Tentativa ${this.connectionAttempts}/${this.maxAttempts} em 5 segundos...\n`);
-                    
-                    setTimeout(() => {
-                        this.isFirstConnection = false;
-                        this.connectToWhatsApp();
-                    }, 5000);
-                } else if (this.connectionAttempts >= this.maxAttempts) {
-                    console.log('\n❌ Máximo de tentativas atingido.');
-                    console.log('💡 Delete a pasta "auth_info" e reinicie:\n');
-                    console.log('   rm -rf auth_info && npm start\n');
-                    process.exit(1);
-                } else {
-                    console.log('❌ Sessão encerrada. Delete a pasta "auth_info" e reinicie o bot.\n');
-                    process.exit(0);
-                }
-            } 
+            if (connection === 'connecting') {
+                console.log('🔌 Conectando aos servidores WhatsApp...');
+            }
             else if (connection === 'open') {
-                console.log('\n✅ CONECTADO COM SUCESSO!\n');
+                console.log('\n╔════════════════════════════════╗');
+                console.log('║   ✅ CONECTADO COM SUCESSO!   ║');
+                console.log('╚════════════════════════════════╝\n');
+                
                 this.isConnecting = false;
-                this.isFirstConnection = false;
-                this.connectionAttempts = 0;
                 
                 if (rl && !rl.closed) {
                     rl.close();
                     rl = null;
                 }
             }
-            else if (connection === 'connecting') {
-                console.log('🔌 Conectando...');
+            else if (connection === 'close') {
+                this.isConnecting = false;
+                
+                const statusCode = lastDisconnect?.error?.output?.statusCode;
+                const errorMsg = lastDisconnect?.error?.message || 'Desconhecido';
+                
+                console.log('\n⚠️  Conexão fechada');
+                console.log(`   Status: ${statusCode}`);
+                console.log(`   Erro: ${errorMsg}\n`);
+                
+                if (statusCode === DisconnectReason.loggedOut) {
+                    console.log('❌ Você foi desconectado do WhatsApp.');
+                    console.log('💡 Delete a pasta auth_info e reinicie:\n');
+                    console.log('   rm -rf auth_info && npm start\n');
+                    process.exit(0);
+                }
+                else if (statusCode === 401) {
+                    console.log('❌ Credenciais inválidas.');
+                    console.log('💡 Delete a pasta auth_info e reinicie:\n');
+                    console.log('   rm -rf auth_info && npm start\n');
+                    process.exit(1);
+                }
+                else if (statusCode === 405) {
+                    console.log('❌ ERRO 405 - WhatsApp recusou a conexão\n');
+                    console.log('Possíveis causas:');
+                    console.log('   1. Você tem 4+ dispositivos conectados');
+                    console.log('   2. Sessão inválida/corrompida');
+                    console.log('   3. Número banido temporariamente\n');
+                    console.log('💡 Solução:');
+                    console.log('   • Desconecte um dispositivo no WhatsApp');
+                    console.log('   • OU delete: rm -rf auth_info && npm start\n');
+                    process.exit(1);
+                }
+                else {
+                    console.log('🔄 Reconectando em 5 segundos...\n');
+                    setTimeout(() => this.connectToWhatsApp(), 5000);
+                }
             }
         });
 
@@ -301,7 +349,6 @@ class WhatsAppBot {
     }
 }
 
-// Tratamento de sinais para fechar gracefully
 process.on('SIGINT', () => {
     console.log('\n\n👋 Encerrando bot...\n');
     if (rl && !rl.closed) rl.close();
