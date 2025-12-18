@@ -47,22 +47,29 @@ async function connectToWhatsApp() {
         logger,
         printQRInTerminal: false,
         syncFullHistory: false,
-        markOnlineOnConnect: false
+        markOnlineOnConnect: false,
+        // Configurações para manter conexão viva
+        keepAliveIntervalMs: 10000,
+        connectTimeoutMs: 60000,
+        defaultQueryTimeoutMs: 60000,
+        retryRequestDelayMs: 250
     });
 
     sock.ev.on('creds.update', saveCreds);
 
-    sock.ev.on('connection.update', async (update) => {
-        const { connection, lastDisconnect, qr } = update;
+    sock.ev.on('connection.update', (update) => {
+        const { connection, lastDisconnect } = update;
 
         if (connection === 'close') {
             const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
             console.log('Conexão fechada. Reconectando:', shouldReconnect);
             if (shouldReconnect) {
-                connectToWhatsApp();
+                setTimeout(() => connectToWhatsApp(), 3000);
             }
         } else if (connection === 'open') {
-            console.log('✅ Conectado ao WhatsApp!');
+            console.log('\n━'.repeat(50));
+            console.log('✅ CONECTADO AO WHATSAPP!');
+            console.log('━'.repeat(50));
 
             // Inicializar backend APENAS uma vez
             if (!backendInitialized) {
@@ -86,20 +93,21 @@ async function connectToWhatsApp() {
         }
     });
 
-    // Aguardar socket estar pronto e então pedir pairing code
+    // Solicitar pairing code FORA do event listener
     if (!sock.authState.creds.registered) {
-        // Aguardar um tick para o socket estar pronto
-        setTimeout(async () => {
-            try {
-                const phoneNumber = await question('Digite seu número do WhatsApp (com DDI, ex: 5511999999999): ');
-                const code = await sock.requestPairingCode(phoneNumber);
-                console.log(`Código de pareamento: ${code}`);
-            } catch (error) {
-                console.error('Erro ao gerar código:', error.message);
-                console.log('Tentando novamente em 2s...');
-                setTimeout(() => connectToWhatsApp(), 2000);
-            }
-        }, 2000);
+        // Aguardar 3 segundos para o socket estar pronto
+        await new Promise(resolve => setTimeout(resolve, 3000));
+
+        try {
+            const phoneNumber = await question('Digite seu número do WhatsApp (com DDI, ex: 5511999999999): ');
+            const code = await sock.requestPairingCode(phoneNumber);
+            console.log(`\n✅ Código de pareamento: ${code}\n`);
+            console.log('📱 Abra o WhatsApp e digite o código acima\n');
+        } catch (error) {
+            console.error('Erro ao gerar código:', error.message);
+            console.log('Tentando reconectar...');
+            setTimeout(() => connectToWhatsApp(), 2000);
+        }
     }
 }
 
