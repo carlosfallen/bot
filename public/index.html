@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WhatsApp Bot - Dashboard</title>
+    <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+    <div class="container">
+        <!-- Sidebar -->
+        <aside class="sidebar">
+            <div class="logo">
+                <h2>🤖 WhatsApp Bot</h2>
+            </div>
+            <nav class="nav">
+                <a href="#" class="nav-item active" data-page="dashboard">
+                    <span class="icon">📊</span>
+                    Dashboard
+                </a>
+                <a href="#" class="nav-item" data-page="conversations">
+                    <span class="icon">💬</span>
+                    Conversas
+                </a>
+                <a href="#" class="nav-item" data-page="leads">
+                    <span class="icon">👥</span>
+                    Leads
+                </a>
+                <a href="#" class="nav-item" data-page="test">
+                    <span class="icon">🧪</span>
+                    Testar Bot
+                </a>
+                <a href="#" class="nav-item" data-page="config">
+                    <span class="icon">⚙️</span>
+                    Configurações
+                </a>
+            </nav>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="main">
+            <!-- Header -->
+            <header class="header">
+                <div class="header-left">
+                    <h1 id="page-title">Dashboard</h1>
+                </div>
+                <div class="header-right">
+                    <div class="connection-status" id="connection-status">
+                        <span class="status-dot"></span>
+                        <span class="status-text">Verificando...</span>
+                    </div>
+                </div>
+            </header>
+
+            <!-- Dashboard Page -->
+            <div id="page-dashboard" class="page active">
+                <div class="stats-grid">
+                    <div class="stat-card">
+                        <div class="stat-icon">💬</div>
+                        <div class="stat-info">
+                            <h3>Mensagens Hoje</h3>
+                            <p class="stat-value" id="stat-messages">0</p>
+                        </div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-icon">👥</div>
+                        <div class="stat-info">
+                            <h3>Novos Leads</h3>
+                            <p class="stat-value" id="stat-leads">0</p>
+                        </div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-icon">💬</div>
+                        <div class="stat-info">
+                            <h3>Conversas Ativas</h3>
+                            <p class="stat-value" id="stat-conversations">0</p>
+                        </div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-icon">🤖</div>
+                        <div class="stat-info">
+                            <h3>Respostas Bot</h3>
+                            <p class="stat-value" id="stat-bot-responses">0</p>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="recent-section">
+                    <h2>Conversas Recentes</h2>
+                    <div id="recent-conversations" class="conversations-list">
+                        <p class="loading">Carregando...</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Conversations Page -->
+            <div id="page-conversations" class="page">
+                <div class="conversations-container">
+                    <div class="conversations-sidebar">
+                        <div class="search-box">
+                            <input type="text" placeholder="Buscar conversas..." id="search-conversations">
+                        </div>
+                        <div id="conversations-list" class="conversations-list">
+                            <p class="loading">Carregando...</p>
+                        </div>
+                    </div>
+                    <div class="chat-area">
+                        <div class="chat-empty">
+                            <p>Selecione uma conversa para visualizar</p>
+                        </div>
+                        <div id="chat-messages" class="chat-messages hidden">
+                            <div class="chat-header">
+                                <h3 id="chat-contact-name">Contato</h3>
+                                <div class="chat-actions">
+                                    <button id="toggle-bot-btn" class="btn btn-sm">Desativar Bot</button>
+                                </div>
+                            </div>
+                            <div id="messages-container" class="messages-container"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Leads Page -->
+            <div id="page-leads" class="page">
+                <div class="table-container">
+                    <table class="leads-table">
+                        <thead>
+                            <tr>
+                                <th>Nome</th>
+                                <th>Telefone</th>
+                                <th>Email</th>
+                                <th>Empresa</th>
+                                <th>Última Interação</th>
+                                <th>Status</th>
+                            </tr>
+                        </thead>
+                        <tbody id="leads-tbody">
+                            <tr>
+                                <td colspan="6" class="loading">Carregando...</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Test Page -->
+            <div id="page-test" class="page">
+                <div class="test-container">
+                    <div class="test-chat">
+                        <div class="test-header">
+                            <h3>💬 Testar Respostas do Bot</h3>
+                        </div>
+                        <div id="test-messages" class="test-messages">
+                            <div class="message bot-message">
+                                <p>Olá! Digite uma mensagem para testar o NLP do bot.</p>
+                            </div>
+                        </div>
+                        <div class="test-input">
+                            <input type="text" id="test-message-input" placeholder="Digite sua mensagem...">
+                            <button id="test-send-btn" class="btn">Enviar</button>
+                        </div>
+                    </div>
+                    <div class="test-info">
+                        <h3>📊 Análise NLP</h3>
+                        <div id="nlp-result" class="nlp-result">
+                            <p class="placeholder">Envie uma mensagem para ver a análise NLP</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Config Page -->
+            <div id="page-config" class="page">
+                <div class="config-container">
+                    <div class="config-section">
+                        <h2>Configurações Gerais</h2>
+                        <div class="config-group">
+                            <label class="switch-label">
+                                <input type="checkbox" id="config-bot-enabled" class="switch">
+                                <span class="switch-slider"></span>
+                                Bot Ativo Globalmente
+                            </label>
+                        </div>
+                        <div class="config-group">
+                            <label class="switch-label">
+                                <input type="checkbox" id="config-auto-save-leads" class="switch">
+                                <span class="switch-slider"></span>
+                                Salvar Contatos Automaticamente
+                            </label>
+                        </div>
+                    </div>
+
+                    <div class="config-section">
+                        <h2>Onde o Bot Responde</h2>
+                        <div class="config-group">
+                            <label class="switch-label">
+                                <input type="checkbox" id="config-respond-groups" class="switch">
+                                <span class="switch-slider"></span>
+                                Responder em Grupos
+                            </label>
+                        </div>
+                        <div class="config-group">
+                            <label class="switch-label">
+                                <input type="checkbox" id="config-respond-channels" class="switch">
+                                <span class="switch-slider"></span>
+                                Responder em Canais
+                            </label>
+                        </div>
+                    </div>
+
+                    <div class="config-section">
+                        <h2>Horário de Funcionamento</h2>
+                        <div class="config-group">
+                            <label class="switch-label">
+                                <input type="checkbox" id="config-business-hours" class="switch">
+                                <span class="switch-slider"></span>
+                                Apenas Horário Comercial
+                            </label>
+                        </div>
+                        <div class="config-row">
+                            <div class="config-group">
+                                <label>Início</label>
+                                <input type="time" id="config-hours-start" class="input">
+                            </div>
+                            <div class="config-group">
+                                <label>Fim</label>
+                                <input type="time" id="config-hours-end" class="input">
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="config-section">
+                        <h2>Mensagens Automáticas</h2>
+                        <div class="config-group">
+                            <label>Mensagem de Boas-vindas</label>
+                            <textarea id="config-welcome-message" class="textarea" rows="3"></textarea>
+                        </div>
+                        <div class="config-group">
+                            <label>Mensagem Fora do Horário</label>
+                            <textarea id="config-away-message" class="textarea" rows="3"></textarea>
+                        </div>
+                    </div>
+
+                    <div class="config-actions">
+                        <button id="save-config-btn" class="btn btn-primary">Salvar Configurações</button>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script src="/js/app.js"></script>
+</body>
+</html>

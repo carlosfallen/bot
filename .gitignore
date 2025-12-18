@@ -7,3 +7,18 @@ bun.lockb
 *.log
 .cache/
 .wrangler/
+
+# Autenticação WhatsApp
+auth_info/
+*.session
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Sistema operacional
+.DS_Store
+Thumbs.db

@@ -1,29 +1,21 @@
 {
   "name": "whatsapp-bot-nlp",
-  "version": "2.0.0",
-  "type": "module",
-  "description": "WhatsApp Bot NLP com Baileys e Bun - Enxuto e Otimizado",
+  "version": "3.0.0",
+  "description": "WhatsApp Bot completo com NLP, Dashboard e Cloudflare D1",
   "author": "Bot Team",
   "license": "MIT",
   "scripts": {
-    "dev": "bun --hot src/index.tsx",
-    "start": "bun src/index.tsx",
-    "build": "bun build src/index.tsx --outdir dist --target bun"
+    "start": "node bot-new.js",
+    "dev": "node bot-new.js",
+    "old": "node bot.js",
+    "init-db": "node scripts/init-db.js"
   },
   "dependencies": {
-    "@hapi/boom": "^10.0.1",
     "@whiskeysockets/baileys": "^6.7.8",
-    "natural": "^6.10.0",
-    "pino": "^8.17.2",
-    "qrcode": "^1.5.3"
-  },
-  "devDependencies": {
-    "@types/bun": "latest",
-    "@types/node": "^20.10.6",
-    "@types/qrcode": "^1.5.5",
-    "typescript": "^5.3.3"
+    "dotenv": "^16.6.1",
+    "pino": "^8.17.2"
   },
   "engines": {
-    "bun": ">=1.0.0"
+    "node": ">=16.0.0"
   }
 }
