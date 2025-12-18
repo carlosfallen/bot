@@ -178,11 +178,31 @@ export async function requestPairingCode(phoneNumber: string): Promise<string | 
       markOnlineOnConnect: false
     });
 
-    // Registrar event handlers
+    // Promise para aguardar conexão estar pronta
+    const waitForConnection = new Promise<boolean>((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        reject(new Error('Timeout aguardando conexão'));
+      }, 10000); // 10 segundos de timeout
+
+      sock!.ev.on('connection.update', (update: any) => {
+        const { connection } = update;
+
+        console.log('📡 Status da conexão:', connection);
+
+        if (connection === 'open') {
+          clearTimeout(timeout);
+          connectionStatus = 'connected';
+          console.log('✅ Socket conectado e pronto!');
+          resolve(true);
+        }
+      });
+    });
+
+    // Registrar outros event handlers
     sock.ev.on('creds.update', saveCreds);
 
     sock.ev.on('connection.update', async (update: any) => {
-      const { connection, lastDisconnect } = update;
+      const { connection } = update;
 
       if (connection === 'open') {
         connectionStatus = 'connected';
@@ -190,20 +210,26 @@ export async function requestPairingCode(phoneNumber: string): Promise<string | 
         broadcast({ type: 'status', data: 'connected' });
       } else if (connection === 'close') {
         connectionStatus = 'disconnected';
-        console.log('❌ Conexão fechada após pairing');
         broadcast({ type: 'status', data: 'disconnected' });
       }
     });
 
-    // Aguardar socket estar pronto
-    console.log('⏳ Aguardando socket estar pronto...');
-    await new Promise(resolve => setTimeout(resolve, 3000));
-
+    // Gerar código IMEDIATAMENTE, sem aguardar
     if (!sock.authState.creds.registered) {
       console.log('📲 Gerando código de pareamento...');
       const code = await sock.requestPairingCode(phoneNumber);
       console.log(`✅ Código de pareamento gerado: ${code}`);
       console.log('📱 Digite este código no WhatsApp em: Dispositivos Conectados > Conectar com número');
+      console.log('⏳ Aguardando você digitar o código no WhatsApp...');
+
+      // Aguardar conexão ser estabelecida após pairing
+      try {
+        await waitForConnection;
+        console.log('🎉 Pairing concluído com sucesso!');
+      } catch (timeoutError) {
+        console.log('⚠️  Timeout - mas o código foi gerado. Digite-o no WhatsApp.');
+      }
+
       return code;
     } else {
       console.log('⚠️  Dispositivo já registrado');
