@@ -31,8 +31,13 @@ async function initialize() {
     console.log('   WHATSAPP BOT - SISTEMA COMPLETO');
     console.log('='.repeat(60) + '\n');
 
+    // Conectar ao WhatsApp PRIMEIRO
+    await connectToWhatsApp();
+}
+
+async function initializeBackend() {
     // Inicializar banco de dados
-    console.log('📦 Conectando ao banco de dados...');
+    console.log('\n📦 Conectando ao banco de dados...');
     db = new CloudflareD1({
         accountId: config.cloudflare.accountId,
         databaseId: config.cloudflare.databaseId,
@@ -43,20 +48,25 @@ async function initialize() {
     try {
         botConfig = await db.getAllConfig();
         console.log('✅ Banco de dados conectado');
-        console.log(`✅ ${Object.keys(botConfig).length} configurações carregadas\n`);
+        console.log(`✅ ${Object.keys(botConfig).length} configurações carregadas`);
     } catch (error) {
         console.error('❌ Erro ao conectar ao banco:', error.message);
-        console.log('\n💡 Execute primeiro: npm run init-db\n');
-        process.exit(1);
+        console.log('💡 Execute primeiro: npm run init-db');
+        // Não encerrar o processo, continuar sem DB
+        botConfig = {
+            bot_enabled: true,
+            respond_to_groups: false,
+            respond_to_channels: false,
+            auto_save_leads: false,
+            business_hours_only: false,
+            away_message: 'No momento estamos fora do horário de atendimento.'
+        };
     }
 
     // Inicializar API
     console.log('🌐 Iniciando servidor web...');
     api = new BotAPI(db, { getSocket: () => sock });
     api.start();
-
-    // Conectar ao WhatsApp
-    await connectToWhatsApp();
 }
 
 async function connectToWhatsApp() {
@@ -73,25 +83,38 @@ async function connectToWhatsApp() {
         markOnlineOnConnect: false
     });
 
-    sock.ev.on('creds.update', saveCreds);
+    // Pairing code IMEDIATAMENTE após criar socket (igual ao código que funciona)
+    if (!sock.authState.creds.registered) {
+        const phoneNumber = await question('Digite seu número do WhatsApp (com DDI, ex: 5511999999999): ');
+        const code = await sock.requestPairingCode(phoneNumber);
+        console.log(`Código de pareamento: ${code}`);
+    }
 
+    // Event listeners DEPOIS do pairing code
     sock.ev.on('connection.update', async (update) => {
         const { connection, lastDisconnect } = update;
 
         if (connection === 'close') {
             const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
-            console.log('❌ Conexão fechada. Reconectando:', shouldReconnect);
+            console.log('Conexão fechada. Reconectando:', shouldReconnect);
             if (shouldReconnect) {
-                setTimeout(() => connectToWhatsApp(), 3000);
+                connectToWhatsApp();
             }
         } else if (connection === 'open') {
             console.log('\n━'.repeat(50));
             console.log('✅ CONECTADO AO WHATSAPP!');
             console.log('━'.repeat(50));
+
+            // Inicializar backend DEPOIS de conectar ao WhatsApp
+            if (!db) {
+                await initializeBackend();
+            }
+
             console.log('\n🤖 Bot rodando... Aguardando mensagens.\n');
-            rl.close();
         }
     });
+
+    sock.ev.on('creds.update', saveCreds);
 
     sock.ev.on('messages.upsert', async ({ messages, type }) => {
         try {
@@ -106,13 +129,6 @@ async function connectToWhatsApp() {
             console.log('❌ Erro ao processar mensagem:', error.message);
         }
     });
-
-    // Pairing code DEPOIS de registrar os eventos
-    if (!sock.authState.creds.registered) {
-        const phoneNumber = await question('Digite seu número do WhatsApp (com DDI, ex: 5511999999999): ');
-        const code = await sock.requestPairingCode(phoneNumber);
-        console.log(`\n✅ Código de pareamento: ${code}\n`);
-    }
 }
 
 async function handleMessage(msg) {
