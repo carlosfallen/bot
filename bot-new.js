@@ -79,28 +79,26 @@ class WhatsAppBot {
 
         // Pairing Code se não registrado
         if (!this.sock.authState.creds.registered) {
-            // Aguardar um pouco para o socket estar pronto
-            setTimeout(async () => {
-                try {
-                    console.log('\n📱 CONECTAR WHATSAPP\n');
-                    const phoneNumber = await question('Digite seu número com DDI (ex: 5589994333316): ');
-                    console.log('\n⏳ Gerando código de pareamento...\n');
+            console.log('\n📱 CONECTAR WHATSAPP\n');
+            const phoneNumber = await question('Digite seu número com DDI (ex: 5589994333316): ');
+            console.log('\n⏳ Gerando código de pareamento...\n');
 
-                    const code = await this.sock.requestPairingCode(phoneNumber);
-                    console.log('━'.repeat(50));
-                    console.log(`\n✅ CÓDIGO: ${code}\n`);
-                    console.log('━'.repeat(50));
-                    console.log('\n📱 Abra WhatsApp > Dispositivos Conectados');
-                    console.log('   > Conectar com número de telefone');
-                    console.log(`   > Digite: ${code}\n`);
-                } catch (error) {
-                    console.error('❌ Erro ao gerar código:', error.message);
-                }
-            }, 3000); // Aguarda 3 segundos para o socket estar pronto
+            try {
+                const code = await this.sock.requestPairingCode(phoneNumber);
+                console.log('━'.repeat(50));
+                console.log(`\n✅ CÓDIGO: ${code}\n`);
+                console.log('━'.repeat(50));
+                console.log('\n📱 Abra WhatsApp > Dispositivos Conectados');
+                console.log('   > Conectar com número de telefone');
+                console.log(`   > Digite: ${code}\n`);
+            } catch (error) {
+                console.error('❌ Erro ao gerar código:', error.message);
+                process.exit(1);
+            }
         }
 
         // Eventos de conexão
-        this.sock.ev.on('connection.update', async (update) => {
+        this.sock.ev.on('connection.update', (update) => {
             const { connection, lastDisconnect } = update;
 
             if (connection === 'connecting') {
