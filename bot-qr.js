@@ -1,19 +1,11 @@
-// WhatsApp Bot - Versão Minimalista Funcional
-// Aguarda conexão estável antes de gerar pairing code
+// WhatsApp Bot - Conexão via QR Code (MAIS CONFIÁVEL)
 
 const { default: makeWASocket, DisconnectReason, useMultiFileAuthState, makeCacheableSignalKeyStore } = require('@whiskeysockets/baileys');
-const readline = require('readline');
+const qrcode = require('qrcode-terminal');
 const P = require('pino');
 
 const logger = P({ level: 'silent' });
 let sock = null;
-
-const rl = readline.createInterface({
-    input: process.stdin,
-    output: process.stdout
-});
-
-const question = (text) => new Promise((resolve) => rl.question(text, resolve));
 
 // Respostas NLP
 const responses = {
@@ -58,42 +50,15 @@ async function connectToWhatsApp() {
 
     sock.ev.on('creds.update', saveCreds);
 
-    // Pairing Code ANTES de registrar connection.update
-    if (!sock.authState.creds.registered) {
-        console.log('\n📱 CONECTAR WHATSAPP\n');
-        const phoneNumber = await question('Digite seu número com DDI (ex: 5589994333316): ');
-
-        console.log('\n⏳ Preparando conexão...');
-
-        // Aguardar 3 segundos para socket inicializar
-        await new Promise(resolve => setTimeout(resolve, 3000));
-
-        console.log('📲 Gerando código de pareamento...\n');
-
-        try {
-            const code = await sock.requestPairingCode(phoneNumber);
-
-            console.log('━'.repeat(60));
-            console.log(`\n✅ CÓDIGO: ${code}\n`);
-            console.log('━'.repeat(60));
-            console.log('\n📱 NO SEU WHATSAPP:\n');
-            console.log('1. Configurações > Dispositivos Conectados');
-            console.log('2. Conectar um Dispositivo');
-            console.log('3. Conectar com número de telefone');
-            console.log(`4. Digite: ${code}\n`);
-            console.log('⏳ Aguardando você digitar o código...\n');
-
-        } catch (error) {
-            console.error('\n❌ Erro:', error.message);
-            console.log('\n💡 SOLUÇÃO: Use QR Code ao invés de Pairing Code\n');
-            console.log('Execute: node bot-qr.js\n');
-            process.exit(1);
-        }
-    }
-
-    // Eventos de conexão
     sock.ev.on('connection.update', (update) => {
-        const { connection, lastDisconnect } = update;
+        const { connection, lastDisconnect, qr } = update;
+
+        // Exibir QR Code no terminal
+        if (qr) {
+            console.log('\n📱 ESCANEIE O QR CODE ABAIXO:\n');
+            qrcode.generate(qr, { small: true });
+            console.log('\n📱 Abra WhatsApp > Dispositivos Conectados > Escanear QR Code\n');
+        }
 
         if (connection === 'connecting') {
             console.log('🔄 Conectando...');
@@ -105,11 +70,11 @@ async function connectToWhatsApp() {
 
             console.log('\n❌ Conexão fechada');
 
-            if (shouldReconnect && statusCode !== 405 && statusCode !== 428) {
+            if (shouldReconnect) {
                 console.log('⏳ Reconectando em 5s...\n');
                 setTimeout(connectToWhatsApp, 5000);
             } else {
-                console.log('⚠️  Execute novamente: node bot.js\n');
+                console.log('⚠️  Execute novamente: node bot-qr.js\n');
                 process.exit(1);
             }
         }
@@ -119,7 +84,6 @@ async function connectToWhatsApp() {
             console.log('✅ CONECTADO AO WHATSAPP!');
             console.log('━'.repeat(60));
             console.log('\n🤖 Bot ativo. Aguardando mensagens...\n');
-            rl.close();
         }
     });
 
@@ -151,11 +115,10 @@ async function connectToWhatsApp() {
 }
 
 console.log('\n' + '='.repeat(60));
-console.log('   WHATSAPP BOT COM NLP');
+console.log('   WHATSAPP BOT - QR CODE');
 console.log('='.repeat(60) + '\n');
 
 connectToWhatsApp().catch((error) => {
     console.error('\n❌ Erro fatal:', error.message);
-    console.log('\n💡 Tente: node bot-qr.js (QR Code)\n');
     process.exit(1);
 });
