@@ -11,12 +11,17 @@ const config = require('./src/config/index.js');
 
 const logger = P({ level: 'silent' });
 
-const rl = readline.createInterface({
-    input: process.stdin,
-    output: process.stdout
-});
+let rl = null;
 
-const question = (text) => new Promise((resolve) => rl.question(text, resolve));
+const question = (text) => new Promise((resolve) => {
+    if (!rl || rl.closed) {
+        rl = readline.createInterface({
+            input: process.stdin,
+            output: process.stdout
+        });
+    }
+    rl.question(text, resolve);
+});
 
 class WhatsAppBot {
     constructor() {
@@ -26,6 +31,8 @@ class WhatsAppBot {
         this.api = null;
         this.isConnecting = false;
         this.isFirstConnection = true;
+        this.connectionAttempts = 0;
+        this.maxAttempts = 3;
         this.config = {
             bot_enabled: true,
             respond_to_groups: false,
@@ -38,11 +45,8 @@ class WhatsAppBot {
     async initialize() {
         console.log('\n=== WHATSAPP BOT ===\n');
 
-        // Inicializar database e API ANTES de conectar
         await this.initializeDatabase();
         await this.initializeAPI();
-
-        // Conectar ao WhatsApp por último
         await this.connectToWhatsApp();
     }
 
@@ -74,7 +78,6 @@ class WhatsAppBot {
     }
 
     async connectToWhatsApp() {
-        // Evitar múltiplas tentativas simultâneas
         if (this.isConnecting) {
             console.log('⚠️  Já há uma tentativa de conexão em andamento...');
             return;
@@ -85,6 +88,7 @@ class WhatsAppBot {
         try {
             const { state, saveCreds } = await useMultiFileAuthState('auth_info');
 
+            // Criar o socket
             this.sock = makeWASocket({
                 auth: {
                     creds: state.creds,
@@ -93,72 +97,118 @@ class WhatsAppBot {
                 logger,
                 printQRInTerminal: false,
                 syncFullHistory: false,
-                markOnlineOnConnect: false
+                markOnlineOnConnect: false,
+                connectTimeoutMs: 60000, // 60 segundos de timeout
+                defaultQueryTimeoutMs: 60000,
+                keepAliveIntervalMs: 30000
             });
 
-            // Solicitar código apenas na primeira conexão E se não estiver registrado
-            if (this.isFirstConnection && !this.sock.authState.creds.registered) {
+            // Configurar eventos ANTES de solicitar o código
+            this.setupEventHandlers(saveCreds);
+
+            // Aguardar um pouco para o socket estabilizar
+            await new Promise(resolve => setTimeout(resolve, 2000));
+
+            // Solicitar código apenas na primeira vez e se não registrado
+            if (this.isFirstConnection && !state.creds.registered) {
+                console.log('\n⚠️  Você tem 60 segundos para inserir o código no WhatsApp!\n');
+                
                 const phoneNumber = await question('Digite seu número com DDI (ex: 5589994333316): ');
-                const code = await this.sock.requestPairingCode(phoneNumber);
-                console.log(`\n✅ CÓDIGO: ${code}\n`);
-            }
-
-            this.sock.ev.on('connection.update', async (update) => {
-                const { connection, lastDisconnect } = update;
-
-                if (connection === 'close') {
-                    this.isConnecting = false;
-                    
-                    const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
-                    
-                    if (shouldReconnect) {
-                        console.log('⚠️  Conexão fechada. Reconectando em 3 segundos...');
-                        setTimeout(() => {
-                            this.isFirstConnection = false; // Não solicitar código novamente
-                            this.connectToWhatsApp();
-                        }, 3000);
-                    } else {
-                        console.log('❌ Desconectado. Faça login novamente.');
-                        process.exit(0);
-                    }
-                } else if (connection === 'open') {
-                    console.log('\n✅ CONECTADO!\n');
-                    this.isConnecting = false;
-                    this.isFirstConnection = false;
-                    
-                    // Fechar readline apenas após primeira conexão bem-sucedida
-                    if (rl && !rl.closed) {
-                        rl.close();
-                    }
-                }
-            });
-
-            this.sock.ev.on('creds.update', saveCreds);
-
-            this.sock.ev.on('messages.upsert', async ({ messages, type }) => {
+                
                 try {
-                    if (type !== 'notify') return;
-
-                    const msg = messages[0];
-
-                    if (msg.key.fromMe || msg.key.remoteJid.includes('@newsletter')) return;
-
-                    await this.handleMessage(msg);
-
+                    const code = await this.sock.requestPairingCode(phoneNumber.replace(/\D/g, ''));
+                    console.log(`\n✅ CÓDIGO DE PAREAMENTO: ${code}`);
+                    console.log('📱 Abra o WhatsApp > Aparelhos conectados > Conectar aparelho');
+                    console.log('📝 Digite o código acima\n');
+                    console.log('⏳ Aguardando conexão...\n');
                 } catch (error) {
-                    console.error('❌ Erro ao processar mensagem:', error.message);
+                    console.error('❌ Erro ao solicitar código:', error.message);
+                    this.isConnecting = false;
+                    
+                    // Tentar novamente
+                    if (this.connectionAttempts < this.maxAttempts) {
+                        this.connectionAttempts++;
+                        console.log(`\n🔄 Tentativa ${this.connectionAttempts}/${this.maxAttempts}...\n`);
+                        setTimeout(() => this.connectToWhatsApp(), 3000);
+                    } else {
+                        console.log('\n❌ Máximo de tentativas atingido. Reinicie o bot.\n');
+                        process.exit(1);
+                    }
                 }
-            });
+            }
 
         } catch (error) {
             this.isConnecting = false;
             console.error('❌ Erro ao conectar:', error.message);
             
-            // Tentar reconectar após erro
-            setTimeout(() => {
-                this.connectToWhatsApp();
-            }, 5000);
+            if (this.connectionAttempts < this.maxAttempts) {
+                this.connectionAttempts++;
+                console.log(`\n🔄 Nova tentativa em 5 segundos... (${this.connectionAttempts}/${this.maxAttempts})\n`);
+                setTimeout(() => this.connectToWhatsApp(), 5000);
+            } else {
+                console.log('\n❌ Não foi possível conectar após várias tentativas.\n');
+                process.exit(1);
+            }
         }
+    }
+
+    setupEventHandlers(saveCreds) {
+        this.sock.ev.on('connection.update', async (update) => {
+            const { connection, lastDisconnect, qr } = update;
+
+            if (connection === 'close') {
+                this.isConnecting = false;
+                
+                const statusCode = lastDisconnect?.error?.output?.statusCode;
+                const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
+                
+                console.log(`\n⚠️  Conexão fechada. Status: ${statusCode}`);
+                
+                if (shouldReconnect) {
+                    console.log('🔄 Reconectando em 5 segundos...\n');
+                    
+                    setTimeout(() => {
+                        this.isFirstConnection = false;
+                        this.connectionAttempts = 0; // Reset tentativas em reconexão
+                        this.connectToWhatsApp();
+                    }, 5000);
+                } else {
+                    console.log('❌ Sessão encerrada. Delete a pasta "auth_info" e reinicie o bot.\n');
+                    process.exit(0);
+                }
+            } 
+            else if (connection === 'open') {
+                console.log('\n✅ CONECTADO COM SUCESSO!\n');
+                this.isConnecting = false;
+                this.isFirstConnection = false;
+                this.connectionAttempts = 0;
+                
+                if (rl && !rl.closed) {
+                    rl.close();
+                    rl = null;
+                }
+            }
+            else if (connection === 'connecting') {
+                console.log('🔌 Conectando...');
+            }
+        });
+
+        this.sock.ev.on('creds.update', saveCreds);
+
+        this.sock.ev.on('messages.upsert', async ({ messages, type }) => {
+            try {
+                if (type !== 'notify') return;
+
+                const msg = messages[0];
+
+                if (msg.key.fromMe || msg.key.remoteJid.includes('@newsletter')) return;
+
+                await this.handleMessage(msg);
+
+            } catch (error) {
+                console.error('❌ Erro ao processar mensagem:', error.message);
+            }
+        });
     }
 
     async handleMessage(msg) {
@@ -229,9 +279,23 @@ class WhatsAppBot {
     }
 }
 
+// Tratamento de sinais para fechar gracefully
+process.on('SIGINT', () => {
+    console.log('\n\n👋 Encerrando bot...\n');
+    if (rl && !rl.closed) rl.close();
+    process.exit(0);
+});
+
+process.on('SIGTERM', () => {
+    console.log('\n\n👋 Encerrando bot...\n');
+    if (rl && !rl.closed) rl.close();
+    process.exit(0);
+});
+
 const bot = new WhatsAppBot();
 
 bot.initialize().catch((error) => {
     console.error('\n❌ Erro fatal:', error.message);
+    if (rl && !rl.closed) rl.close();
     process.exit(1);
 });
