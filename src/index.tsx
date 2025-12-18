@@ -150,8 +150,14 @@ const server = Bun.serve({
       );
     }
 
-    // WebSocket upgrade
-    if (server.upgrade(req)) return;
+    // WebSocket upgrade - verificar headers antes
+    const upgradeHeader = req.headers.get('upgrade');
+    if (upgradeHeader === 'websocket') {
+      const upgraded = server.upgrade(req);
+      if (upgraded) {
+        return undefined; // Connection foi upgradada para WebSocket
+      }
+    }
 
     return new Response('Not Found', { status: 404 });
   },
@@ -361,7 +367,9 @@ function getIndexHTML() {
     let ws = null;
 
     function connectWebSocket() {
-      ws = new WebSocket('ws://localhost:${PORT}');
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const wsUrl = protocol + '//' + window.location.host;
+      ws = new WebSocket(wsUrl);
 
       ws.onopen = () => {
         addLog('WebSocket conectado', 'system');
@@ -378,6 +386,11 @@ function getIndexHTML() {
           addLog(\`Recebido de \${data.data.from}: \${data.data.text}\`, 'incoming');
           addLog(\`Resposta: \${data.data.response}\`, 'outgoing');
         }
+      };
+
+      ws.onerror = (error) => {
+        console.error('WebSocket error:', error);
+        addLog('Erro na conexão WebSocket', 'system');
       };
 
       ws.onclose = () => {
