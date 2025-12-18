@@ -150,13 +150,10 @@ const server = Bun.serve({
       );
     }
 
-    // WebSocket upgrade - verificar headers antes
-    const upgradeHeader = req.headers.get('upgrade');
-    if (upgradeHeader === 'websocket') {
-      const upgraded = server.upgrade(req);
-      if (upgraded) {
-        return undefined; // Connection foi upgradada para WebSocket
-      }
+    // WebSocket upgrade
+    const success = server.upgrade(req);
+    if (success) {
+      return; // retornar nada quando upgrade for bem-sucedido
     }
 
     return new Response('Not Found', { status: 404 });
