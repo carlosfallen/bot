@@ -1,12 +1,9 @@
-// WhatsApp Bot Completo - Com NLP, Dashboard e Banco de Dados
 require('dotenv').config();
 
 const { default: makeWASocket, DisconnectReason, useMultiFileAuthState, makeCacheableSignalKeyStore } = require('@whiskeysockets/baileys');
 const readline = require('readline');
 const P = require('pino');
-const fs = require('fs');
 
-// Importar módulos do bot
 const nlpAnalyzer = require('./src/nlp/analyzer.js');
 const CloudflareD1 = require('./src/database/d1.js');
 const BotAPI = require('./src/api/server.js');
@@ -35,7 +32,6 @@ class WhatsAppBot {
         console.log('   WHATSAPP BOT - SISTEMA COMPLETO');
         console.log('='.repeat(60) + '\n');
 
-        // Inicializar banco de dados
         console.log('📦 Conectando ao banco de dados...');
         this.db = new CloudflareD1({
             accountId: config.cloudflare.accountId,
@@ -43,7 +39,6 @@ class WhatsAppBot {
             apiToken: config.cloudflare.apiToken
         });
 
-        // Carregar configurações do banco
         try {
             this.config = await this.db.getAllConfig();
             console.log('✅ Banco de dados conectado');
@@ -54,12 +49,10 @@ class WhatsAppBot {
             process.exit(1);
         }
 
-        // Inicializar API
         console.log('🌐 Iniciando servidor web...');
         this.api = new BotAPI(this.db, this);
         this.api.start();
 
-        // Conectar ao WhatsApp
         await this.connectToWhatsApp();
     }
 
@@ -77,68 +70,39 @@ class WhatsAppBot {
             markOnlineOnConnect: false
         });
 
-        // Pairing Code se não registrado
         if (!this.sock.authState.creds.registered) {
-            console.log('\n📱 CONECTAR WHATSAPP\n');
             const phoneNumber = await question('Digite seu número com DDI (ex: 5589994333316): ');
-            console.log('\n⏳ Gerando código de pareamento...\n');
-
-            try {
-                const code = await this.sock.requestPairingCode(phoneNumber);
-                console.log('━'.repeat(50));
-                console.log(`\n✅ CÓDIGO: ${code}\n`);
-                console.log('━'.repeat(50));
-                console.log('\n📱 Abra WhatsApp > Dispositivos Conectados');
-                console.log('   > Conectar com número de telefone');
-                console.log(`   > Digite: ${code}\n`);
-            } catch (error) {
-                console.error('❌ Erro ao gerar código:', error.message);
-                process.exit(1);
-            }
+            const code = await this.sock.requestPairingCode(phoneNumber);
+            console.log(`\n✅ CÓDIGO: ${code}\n`);
+            console.log('📱 Abra WhatsApp > Dispositivos Conectados');
+            console.log('   > Conectar com número de telefone');
+            console.log(`   > Digite: ${code}\n`);
         }
 
-        // Eventos de conexão
         this.sock.ev.on('connection.update', (update) => {
             const { connection, lastDisconnect } = update;
 
-            if (connection === 'connecting') {
-                console.log('🔄 Conectando...');
-            }
-
             if (connection === 'close') {
-                const statusCode = lastDisconnect?.error?.output?.statusCode;
-                const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
-
-                console.log('\n❌ Conexão fechada');
-
+                const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
+                console.log('Conexão fechada. Reconectando:', shouldReconnect);
                 if (shouldReconnect) {
-                    console.log('⏳ Reconectando em 5s...\n');
-                    setTimeout(() => this.connectToWhatsApp(), 5000);
-                } else {
-                    console.log('⚠️  Você foi desconectado. Execute novamente para reconectar.\n');
-                    process.exit(1);
+                    this.connectToWhatsApp();
                 }
-            }
-
-            if (connection === 'open') {
-                console.log('\n━'.repeat(50));
-                console.log('✅ CONECTADO AO WHATSAPP!');
-                console.log('━'.repeat(50));
-                console.log('\n🤖 Bot rodando... Aguardando mensagens.\n');
+            } else if (connection === 'open') {
+                console.log('\n✅ CONECTADO AO WHATSAPP!');
+                console.log('🤖 Bot rodando... Aguardando mensagens.\n');
                 rl.close();
             }
         });
 
         this.sock.ev.on('creds.update', saveCreds);
 
-        // Processar mensagens recebidas
         this.sock.ev.on('messages.upsert', async ({ messages, type }) => {
             try {
                 if (type !== 'notify') return;
 
                 const msg = messages[0];
 
-                // Ignorar mensagens próprias e newsletters
                 if (msg.key.fromMe || msg.key.remoteJid.includes('@newsletter')) return;
 
                 await this.handleMessage(msg);
@@ -157,7 +121,6 @@ class WhatsAppBot {
 
         if (!messageText) return;
 
-        // Determinar tipo de chat
         const chatType = remoteJid.endsWith('@g.us') ? 'group' :
                         remoteJid.endsWith('@newsletter') ? 'channel' :
                         'private';
@@ -165,13 +128,11 @@ class WhatsAppBot {
         console.log(`\n📨 Mensagem ${chatType} de ${remoteJid}`);
         console.log(`   Texto: ${messageText}`);
 
-        // Verificar configurações globais
         if (!this.config.bot_enabled) {
             console.log('   ⏸️  Bot desativado globalmente');
             return;
         }
 
-        // Verificar se deve responder baseado no tipo de chat
         if (chatType === 'group' && !this.config.respond_to_groups) {
             console.log('   ⏸️  Bot não responde em grupos');
             return;
@@ -182,11 +143,9 @@ class WhatsAppBot {
             return;
         }
 
-        // Extrair número de telefone
         const phone = remoteJid.split('@')[0];
 
         try {
-            // Salvar ou atualizar lead
             let leadId = null;
             if (this.config.auto_save_leads && chatType === 'private') {
                 leadId = await this.db.saveLead({
@@ -200,14 +159,11 @@ class WhatsAppBot {
                 await this.db.incrementStat('new_leads');
             }
 
-            // Obter ou criar conversa
             const conversation = await this.db.getOrCreateConversation(remoteJid, leadId, chatType);
 
-            // Verificar se bot está ativo para esta conversa
             if (!conversation.is_bot_active) {
                 console.log('   ⏸️  Bot desativado para esta conversa');
 
-                // Salvar mensagem mesmo sem responder
                 await this.db.saveMessage(conversation.id, {
                     messageId: msg.key.id,
                     direction: 'incoming',
@@ -221,7 +177,6 @@ class WhatsAppBot {
                 return;
             }
 
-            // Verificar horário comercial
             if (this.config.business_hours_only && !this.isBusinessHours()) {
                 const response = this.config.away_message;
 
@@ -229,7 +184,6 @@ class WhatsAppBot {
 
                 console.log(`   🕐 Fora do horário: ${response}\n`);
 
-                // Salvar mensagens
                 await this.db.saveMessage(conversation.id, {
                     messageId: msg.key.id,
                     direction: 'incoming',
@@ -255,12 +209,10 @@ class WhatsAppBot {
                 return;
             }
 
-            // Processar com NLP
             const nlpResult = await this.nlp.analyze(messageText, remoteJid);
 
             console.log(`   🧠 Intent: ${nlpResult.intent} (${(nlpResult.confidence * 100).toFixed(1)}%)`);
 
-            // Salvar mensagem recebida
             await this.db.saveMessage(conversation.id, {
                 messageId: msg.key.id,
                 direction: 'incoming',
@@ -273,14 +225,12 @@ class WhatsAppBot {
 
             await this.db.incrementStat('total_messages');
 
-            // Enviar resposta
             const response = nlpResult.response;
 
             await this.sock.sendMessage(remoteJid, { text: response });
 
             console.log(`   ✅ Resposta: ${response.substring(0, 50)}...\n`);
 
-            // Salvar resposta do bot
             await this.db.saveMessage(conversation.id, {
                 messageId: null,
                 direction: 'outgoing',
@@ -294,9 +244,7 @@ class WhatsAppBot {
             await this.db.incrementStat('bot_responses');
             await this.db.incrementStat('total_conversations');
 
-            // Se deve coletar dados do lead
             if (nlpResult.shouldCollectData && Object.keys(nlpResult.entities).length > 0) {
-                // Atualizar lead com entidades extraídas
                 if (leadId) {
                     await this.db.saveLead({
                         phone,
@@ -331,7 +279,6 @@ class WhatsAppBot {
     }
 }
 
-// Iniciar bot
 const bot = new WhatsAppBot();
 
 bot.initialize().catch((error) => {
@@ -339,7 +286,6 @@ bot.initialize().catch((error) => {
     process.exit(1);
 });
 
-// Tratamento de erros
 process.on('uncaughtException', (error) => {
     console.error('❌ Erro não capturado:', error.message);
 });
