@@ -149,33 +149,71 @@ export async function connectToWhatsApp() {
 
 export async function requestPairingCode(phoneNumber: string): Promise<string | null> {
   try {
-    if (!sock) {
-      const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
+    console.log('📱 Solicitando pairing code para:', phoneNumber);
 
-      sock = makeWASocket({
-        auth: {
-          creds: state.creds,
-          keys: makeCacheableSignalKeyStore(state.keys, logger)
-        },
-        logger,
-        printQRInTerminal: false
-      });
-
-      sock.ev.on('creds.update', saveCreds);
-
-      // Aguardar socket estar pronto
-      await new Promise(resolve => setTimeout(resolve, 2000));
+    // Se já existe socket conectado, não precisa de pairing
+    if (connectionStatus === 'connected') {
+      console.log('⚠️  WhatsApp já está conectado');
+      return null;
     }
+
+    // Limpar socket anterior se existir
+    if (sock) {
+      console.log('🔄 Limpando socket anterior...');
+      sock.end(undefined);
+      sock = null;
+    }
+
+    console.log('🔧 Criando novo socket para pairing...');
+    const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
+
+    sock = makeWASocket({
+      auth: {
+        creds: state.creds,
+        keys: makeCacheableSignalKeyStore(state.keys, logger)
+      },
+      logger,
+      printQRInTerminal: false,
+      syncFullHistory: false,
+      markOnlineOnConnect: false
+    });
+
+    // Registrar event handlers
+    sock.ev.on('creds.update', saveCreds);
+
+    sock.ev.on('connection.update', async (update: any) => {
+      const { connection, lastDisconnect } = update;
+
+      if (connection === 'open') {
+        connectionStatus = 'connected';
+        console.log('✅ Conectado ao WhatsApp via Pairing Code!');
+        broadcast({ type: 'status', data: 'connected' });
+      } else if (connection === 'close') {
+        connectionStatus = 'disconnected';
+        console.log('❌ Conexão fechada após pairing');
+        broadcast({ type: 'status', data: 'disconnected' });
+      }
+    });
+
+    // Aguardar socket estar pronto
+    console.log('⏳ Aguardando socket estar pronto...');
+    await new Promise(resolve => setTimeout(resolve, 3000));
 
     if (!sock.authState.creds.registered) {
+      console.log('📲 Gerando código de pareamento...');
       const code = await sock.requestPairingCode(phoneNumber);
-      console.log(`✅ Código de pareamento: ${code}`);
+      console.log(`✅ Código de pareamento gerado: ${code}`);
+      console.log('📱 Digite este código no WhatsApp em: Dispositivos Conectados > Conectar com número');
       return code;
+    } else {
+      console.log('⚠️  Dispositivo já registrado');
+      return null;
     }
 
-    return null;
-  } catch (error) {
-    console.error('❌ Erro ao gerar código:', error);
+  } catch (error: any) {
+    console.error('❌ Erro ao gerar pairing code');
+    console.error('   Mensagem:', error?.message || error);
+    console.error('   Stack:', error?.stack);
     return null;
   }
 }
