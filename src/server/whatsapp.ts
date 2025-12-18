@@ -52,7 +52,17 @@ export async function connectToWhatsApp() {
 
       if (connection === 'close') {
         const statusCode = lastDisconnect?.error?.output?.statusCode;
-        const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
+
+        // Não reconectar em erros de autenticação
+        const authErrors = [
+          DisconnectReason.loggedOut,
+          405, // Connection Failure
+          428, // Connection Terminated (precisa autenticar)
+          401, // Unauthorized
+          403, // Forbidden
+        ];
+
+        const shouldReconnect = !authErrors.includes(statusCode);
 
         console.log('❌ Conexão fechada');
         console.log('   Status Code:', statusCode);
@@ -60,13 +70,19 @@ export async function connectToWhatsApp() {
         console.log('   Reconectando:', shouldReconnect);
 
         connectionStatus = 'disconnected';
-        qrCode = null;
         sock = null;
         broadcast({ type: 'status', data: 'disconnected' });
 
         if (shouldReconnect) {
           console.log('⏳ Aguardando 5s para reconectar...');
           setTimeout(() => connectToWhatsApp(), 5000);
+        } else {
+          console.log('⚠️  Aguardando autenticação via QR Code ou Pairing Code');
+          console.log('📱 Acesse http://localhost:3210 para conectar');
+          // Manter QR Code se existir para o usuário escanear
+          if (qrCode) {
+            console.log('✅ QR Code disponível no dashboard');
+          }
         }
       } else if (connection === 'open') {
         connectionStatus = 'connected';
