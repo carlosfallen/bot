@@ -160,18 +160,40 @@ class WhatsAppBot {
                 this.isConnecting = false;
                 
                 const statusCode = lastDisconnect?.error?.output?.statusCode;
+                const errorMsg = lastDisconnect?.error?.message || 'Desconhecido';
+                
+                console.log(`\n⚠️  Conexão fechada.`);
+                console.log(`   Status: ${statusCode}`);
+                console.log(`   Erro: ${errorMsg}`);
+                
+                // 405 = método não permitido / muitos dispositivos / sessão inválida
+                if (statusCode === 405) {
+                    console.log('\n❌ ERRO 405 - Possíveis causas:');
+                    console.log('   1. Você já tem 4 dispositivos conectados no WhatsApp');
+                    console.log('   2. A sessão está corrompida');
+                    console.log('   3. O número foi banido temporariamente\n');
+                    console.log('💡 SOLUÇÃO:');
+                    console.log('   1. Abra o WhatsApp e desconecte algum dispositivo');
+                    console.log('   2. OU delete a pasta "auth_info" e tente novamente:');
+                    console.log('      rm -rf auth_info && npm start\n');
+                    process.exit(1);
+                }
+                
                 const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
                 
-                console.log(`\n⚠️  Conexão fechada. Status: ${statusCode}`);
-                
-                if (shouldReconnect) {
-                    console.log('🔄 Reconectando em 5 segundos...\n');
+                if (shouldReconnect && this.connectionAttempts < this.maxAttempts) {
+                    this.connectionAttempts++;
+                    console.log(`🔄 Tentativa ${this.connectionAttempts}/${this.maxAttempts} em 5 segundos...\n`);
                     
                     setTimeout(() => {
                         this.isFirstConnection = false;
-                        this.connectionAttempts = 0; // Reset tentativas em reconexão
                         this.connectToWhatsApp();
                     }, 5000);
+                } else if (this.connectionAttempts >= this.maxAttempts) {
+                    console.log('\n❌ Máximo de tentativas atingido.');
+                    console.log('💡 Delete a pasta "auth_info" e reinicie:\n');
+                    console.log('   rm -rf auth_info && npm start\n');
+                    process.exit(1);
                 } else {
                     console.log('❌ Sessão encerrada. Delete a pasta "auth_info" e reinicie o bot.\n');
                     process.exit(0);
