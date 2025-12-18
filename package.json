@@ -5,8 +5,8 @@
   "author": "Bot Team",
   "license": "MIT",
   "scripts": {
-    "start": "node bot-new.js",
-    "dev": "node bot-new.js",
+    "start": "node bot.js",
+    "dev": "node bot.js",
     "old": "node bot.js",
     "init-db": "node scripts/init-db.js"
   },
