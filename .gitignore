@@ -22,3 +22,5 @@ auth_info/
 Thumbs.db
 .claude
 scripts
+
+package-lock.json
