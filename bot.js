@@ -1,3 +1,4 @@
+
 // FILE: bot.js
 require('dotenv').config();
 
@@ -24,48 +25,37 @@ let botConfig = {
     business_hours_only: false,
     business_hours_start: '09:00',
     business_hours_end: '18:00',
-    away_message: 'No momento estamos fora do horário de atendimento.'
+    away_message: 'No momento estamos fora do horário comercial. Retornamos em breve!'
 };
-let backendInitialized = false;
+let backendReady = false;
 let nlpReady = false;
 
-function createReadline() {
-    if (rl) {
-        try { rl.close(); } catch (e) {}
-    }
-    rl = readline.createInterface({
-        input: process.stdin,
-        output: process.stdout
-    });
+function createRl() {
+    if (rl) try { rl.close(); } catch {}
+    rl = readline.createInterface({ input: process.stdin, output: process.stdout });
     return rl;
 }
 
 function question(text) {
-    return new Promise((resolve) => {
-        if (!rl) createReadline();
+    return new Promise(resolve => {
+        if (!rl) createRl();
         rl.question(text, resolve);
     });
 }
 
-function closeReadline() {
-    if (rl) {
-        try { rl.close(); } catch (e) {}
-        rl = null;
-    }
+function closeRl() {
+    if (rl) try { rl.close(); } catch {}
+    rl = null;
 }
 
 async function connectToWhatsApp() {
     const { state, saveCreds } = await useMultiFileAuthState('auth_info');
     const { version } = await fetchLatestBaileysVersion();
-    
     const isRegistered = state.creds?.registered;
 
     sock = makeWASocket({
         version,
-        auth: {
-            creds: state.creds,
-            keys: makeCacheableSignalKeyStore(state.keys, logger)
-        },
+        auth: { creds: state.creds, keys: makeCacheableSignalKeyStore(state.keys, logger) },
         logger,
         printQRInTerminal: false,
         syncFullHistory: false,
@@ -74,7 +64,6 @@ async function connectToWhatsApp() {
         connectTimeoutMs: 60000,
         defaultQueryTimeoutMs: 60000,
         keepAliveIntervalMs: 30000,
-        emitOwnEvents: false,
         getMessage: async () => undefined
     });
 
@@ -83,292 +72,196 @@ async function connectToWhatsApp() {
     sock.ev.on('connection.update', async (update) => {
         const { connection, lastDisconnect } = update;
 
-        if (connection === 'connecting') {
-            console.log('🔄 Conectando ao WhatsApp...');
-        }
+        if (connection === 'connecting') console.log('🔄 Conectando...');
 
         if (connection === 'close') {
-            const statusCode = lastDisconnect?.error?.output?.statusCode;
-            const reason = Object.keys(DisconnectReason).find(
-                key => DisconnectReason[key] === statusCode
-            ) || statusCode;
-
-            console.log('❌ Conexão fechada');
-            console.log('   Motivo:', reason);
-
-            const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
-
-            if (shouldReconnect) {
-                console.log('🔄 Reconectando em 3 segundos...');
-                setTimeout(() => connectToWhatsApp(), 3000);
+            const code = lastDisconnect?.error?.output?.statusCode;
+            console.log('❌ Desconectado:', code);
+            
+            if (code !== DisconnectReason.loggedOut) {
+                console.log('🔄 Reconectando...');
+                setTimeout(connectToWhatsApp, 3000);
             } else {
-                console.log('\n⚠️  Sessão encerrada. Delete a pasta auth_info e execute novamente.');
+                console.log('⚠️  Delete auth_info e reinicie');
                 process.exit(0);
             }
-        } else if (connection === 'open') {
+        }
+
+        if (connection === 'open') {
             console.log('\n' + '━'.repeat(50));
             console.log('✅ CONECTADO AO WHATSAPP!');
             console.log('━'.repeat(50));
-            
-            closeReadline();
-
-            if (!backendInitialized) {
-                backendInitialized = true;
-                await initializeBackend();
+            closeRl();
+            if (!backendReady) {
+                backendReady = true;
+                await initBackend();
             }
         }
     });
 
-    sock.ev.on('messages.upsert', async (m) => {
-        try {
-            const { messages, type } = m;
-            
-            if (type !== 'notify') return;
-            if (!messages || messages.length === 0) return;
-
-            const msg = messages[0];
-            
-            if (msg.key.fromMe) return;
-            if (!msg.message) return;
-            if (msg.key.remoteJid?.includes('@newsletter')) return;
-
-            await handleMessage(msg);
-        } catch (error) {
-            console.error('❌ Erro no handler de mensagens:', error);
-        }
+    sock.ev.on('messages.upsert', async ({ messages, type }) => {
+        if (type !== 'notify' || !messages?.length) return;
+        const msg = messages[0];
+        if (msg.key.fromMe || !msg.message || msg.key.remoteJid?.includes('@newsletter')) return;
+        await handleMessage(msg);
     });
 
-    // Solicitar código de pareamento apenas se não estiver registrado
     if (!isRegistered) {
-        console.log('\n📱 Primeiro acesso - Pareamento necessário\n');
-
-        await new Promise(resolve => setTimeout(resolve, 2000));
-
+        console.log('\n📱 Pareamento necessário\n');
+        await new Promise(r => setTimeout(r, 2000));
         try {
-            createReadline();
-            const phoneNumber = await question('Digite seu número do WhatsApp (com DDI, ex: 5589994333316): ');
-
-            const code = await sock.requestPairingCode(phoneNumber.replace(/\D/g, ''));
-            console.log(`\n🔑 Código de pareamento: ${code}\n`);
-            console.log('Digite este código no seu WhatsApp:');
-            console.log('   Configurações > Aparelhos conectados > Conectar aparelho\n');
-        } catch (error) {
-            console.error('❌ Erro ao solicitar código:', error.message);
-            console.log('🔄 Tentando novamente em 5 segundos...\n');
-            closeReadline();
-            setTimeout(() => connectToWhatsApp(), 5000);
+            createRl();
+            const phone = await question('Número (com DDI): ');
+            const code = await sock.requestPairingCode(phone.replace(/\D/g, ''));
+            console.log(`\n🔑 Código: ${code}\n`);
+        } catch (e) {
+            console.error('❌', e.message);
+            closeRl();
+            setTimeout(connectToWhatsApp, 5000);
         }
     }
 }
 
-async function initializeBackend() {
+async function initBackend() {
     try {
-        console.log('\n🧠 Inicializando NLP com embeddings...');
+        console.log('\n🧠 Inicializando NLP...');
         await nlpAnalyzer.initializeEmbeddings();
         nlpReady = true;
-    } catch (error) {
-        console.log('⚠️  Embeddings não disponível:', error.message);
+    } catch (e) {
+        console.log('⚠️  NLP fallback');
         nlpReady = true;
     }
 
     try {
-        console.log('📦 Conectando ao banco de dados...');
+        console.log('📦 Conectando banco...');
         db = new CloudflareD1({
             accountId: config.cloudflare.accountId,
             databaseId: config.cloudflare.databaseId,
             apiToken: config.cloudflare.apiToken
         });
-
-        botConfig = await db.getAllConfig();
-        console.log('✅ Banco de dados conectado');
-    } catch (error) {
-        console.error('⚠️  Erro ao conectar banco:', error.message);
+        botConfig = { ...botConfig, ...(await db.getAllConfig()) };
+        console.log('✅ Banco conectado');
+    } catch (e) {
+        console.log('⚠️  Sem banco:', e.message);
     }
 
     try {
-        console.log('🌐 Iniciando servidor web...');
+        console.log('🌐 Iniciando API...');
         api = new BotAPI(db, { getSocket: () => sock });
         api.start();
-    } catch (error) {
-        console.error('⚠️  Erro ao iniciar API:', error.message);
+    } catch (e) {
+        console.log('⚠️  Sem API');
     }
 
-    console.log('\n🤖 Bot pronto! Aguardando mensagens...\n');
+    console.log('\n🤖 Bot pronto!\n');
 }
 
 async function handleMessage(msg) {
-    const remoteJid = msg.key.remoteJid;
-    
-    const messageText = msg.message?.conversation ||
-                       msg.message?.extendedTextMessage?.text ||
-                       msg.message?.imageMessage?.caption ||
-                       msg.message?.videoMessage?.caption ||
-                       '';
+    const jid = msg.key.remoteJid;
+    const text = msg.message?.conversation || msg.message?.extendedTextMessage?.text || msg.message?.imageMessage?.caption || '';
+    const type = jid.endsWith('@g.us') ? 'group' : 'private';
 
-    const chatType = remoteJid.endsWith('@g.us') ? 'group' :
-                    remoteJid.endsWith('@newsletter') ? 'channel' :
-                    'private';
+    console.log(`\n📨 [${type}] ${jid}`);
+    console.log(`   💬 "${text}"`);
 
-    console.log(`\n📨 Mensagem ${chatType} de ${remoteJid}`);
-    console.log(`   Texto: "${messageText}"`);
+    if (!text.trim()) return console.log('   ⏭️ Vazia');
+    if (!botConfig.bot_enabled) return console.log('   ⏸️ Bot off');
+    if (type === 'group' && !botConfig.respond_to_groups) return console.log('   ⏸️ Grupos off');
+    if (!nlpReady) await new Promise(r => setTimeout(r, 1000));
 
-    if (!messageText || messageText.trim() === '') {
-        console.log('   ⏭️  Mensagem vazia, ignorando');
-        return;
-    }
-
-    if (!botConfig.bot_enabled) {
-        console.log('   ⏸️  Bot desativado globalmente');
-        return;
-    }
-
-    if (chatType === 'group' && !botConfig.respond_to_groups) {
-        console.log('   ⏸️  Bot não responde em grupos');
-        return;
-    }
-
-    if (chatType === 'channel' && !botConfig.respond_to_channels) {
-        console.log('   ⏸️  Bot não responde em canais');
-        return;
-    }
-
-    if (!nlpReady) {
-        console.log('   ⏳ Aguardando NLP inicializar...');
-        await new Promise(resolve => setTimeout(resolve, 1000));
-    }
-
-    const phone = remoteJid.split('@')[0];
+    const phone = jid.split('@')[0];
 
     try {
+        // Salvar lead
         let leadId = null;
-        if (db && botConfig.auto_save_leads && chatType === 'private') {
+        if (db && botConfig.auto_save_leads && type === 'private') {
             try {
-                leadId = await db.saveLead({
-                    phone,
-                    name: null,
-                    email: null,
-                    company: null,
-                    tags: []
-                });
-                await db.incrementStat('new_leads');
-            } catch (error) {
-                console.log('   ⚠️  Erro ao salvar lead:', error.message);
-            }
+                leadId = await db.saveLead({ phone, name: null, email: null, company: null, tags: [] });
+            } catch {}
         }
 
-        let conversation = null;
+        // Verificar conversa
+        let conv = null;
         if (db) {
             try {
-                conversation = await db.getOrCreateConversation(remoteJid, leadId, chatType);
-
-                if (!conversation.is_bot_active) {
-                    console.log('   ⏸️  Bot desativado para esta conversa');
-                    return;
-                }
-            } catch (error) {
-                console.log('   ⚠️  Erro ao buscar conversa:', error.message);
-            }
+                conv = await db.getOrCreateConversation(jid, leadId, type);
+                if (!conv.is_bot_active) return console.log('   ⏸️ Bot off p/ conversa');
+            } catch {}
         }
 
+        // Horário comercial
         if (botConfig.business_hours_only && !isBusinessHours()) {
-            const response = botConfig.away_message;
-            await sock.sendMessage(remoteJid, { text: response });
-            console.log('   🕐 Fora do horário');
-            return;
+            await sock.sendMessage(jid, { text: botConfig.away_message });
+            return console.log('   🕐 Fora do horário');
         }
 
-        console.log('   🧠 Processando com NLP...');
-        const nlpResult = await nlpAnalyzer.analyze(messageText, remoteJid);
-        console.log(`   🎯 Intent: ${nlpResult.intent} (${(nlpResult.confidence * 100).toFixed(1)}%) [${nlpResult.method}]`);
+        // Processar
+        const result = await nlpAnalyzer.analyze(text, jid);
+        console.log(`   ✨ ${result.intent} → enviando...`);
 
-        if (db && conversation) {
+        // Salvar mensagem recebida
+        if (db && conv) {
             try {
-                await db.saveMessage(conversation.id, {
+                await db.saveMessage(conv.id, {
                     messageId: msg.key.id,
                     direction: 'incoming',
-                    text: messageText,
-                    intent: nlpResult.intent,
-                    confidence: nlpResult.confidence,
-                    entities: nlpResult.entities,
+                    text,
+                    intent: result.intent,
+                    confidence: result.confidence,
+                    entities: result.entities,
                     isBot: false
                 });
-                await db.incrementStat('total_messages');
-            } catch (error) {
-                console.log('   ⚠️  Erro ao salvar mensagem:', error.message);
-            }
+            } catch {}
         }
 
-        const response = nlpResult.response;
-        console.log(`   💬 Resposta: "${response.substring(0, 50)}..."`);
-        
-        await sock.sendMessage(remoteJid, { text: response });
-        console.log('   ✅ Resposta enviada');
+        // Enviar resposta
+        await sock.sendMessage(jid, { text: result.response });
+        console.log('   ✅ Enviado');
 
-        if (db && conversation) {
+        // Salvar resposta
+        if (db && conv) {
             try {
-                await db.saveMessage(conversation.id, {
+                await db.saveMessage(conv.id, {
                     messageId: null,
                     direction: 'outgoing',
-                    text: response,
-                    intent: nlpResult.intent,
-                    confidence: nlpResult.confidence,
-                    entities: nlpResult.entities,
+                    text: result.response,
+                    intent: result.intent,
+                    confidence: result.confidence,
+                    entities: result.entities,
                     isBot: true
                 });
-                await db.incrementStat('bot_responses');
-                await db.incrementStat('total_conversations');
-            } catch (error) {
-                console.log('   ⚠️  Erro ao salvar resposta:', error.message);
-            }
+            } catch {}
         }
 
-        if (db && leadId && nlpResult.shouldCollectData && Object.keys(nlpResult.entities).length > 0) {
+        // Atualizar lead
+        if (db && leadId && Object.keys(result.entities).length > 0) {
             try {
                 await db.saveLead({
                     phone,
-                    name: nlpResult.entities.name || null,
-                    email: nlpResult.entities.email || null,
-                    company: nlpResult.entities.company || null,
+                    name: result.entities.name || null,
+                    email: result.entities.email || null,
+                    company: result.entities.company || null,
                     tags: []
                 });
-                console.log('   💾 Lead atualizado com:', Object.keys(nlpResult.entities).join(', '));
-            } catch (error) {
-                console.log('   ⚠️  Erro ao atualizar lead:', error.message);
-            }
+                console.log('   💾 Lead atualizado');
+            } catch {}
         }
 
-    } catch (error) {
-        console.error('   ❌ Erro ao processar:', error);
+    } catch (e) {
+        console.error('   ❌', e);
     }
 }
 
 function isBusinessHours() {
     const now = new Date();
-    const currentHour = now.getHours();
-    const currentMinute = now.getMinutes();
-    const currentTime = currentHour * 60 + currentMinute;
-
-    const [startHour, startMinute] = (botConfig.business_hours_start || '09:00').split(':').map(Number);
-    const [endHour, endMinute] = (botConfig.business_hours_end || '18:00').split(':').map(Number);
-
-    const startTime = startHour * 60 + startMinute;
-    const endTime = endHour * 60 + endMinute;
-
-    return currentTime >= startTime && currentTime <= endTime;
+    const time = now.getHours() * 60 + now.getMinutes();
+    const [sh, sm] = (botConfig.business_hours_start || '09:00').split(':').map(Number);
+    const [eh, em] = (botConfig.business_hours_end || '18:00').split(':').map(Number);
+    return time >= sh * 60 + sm && time <= eh * 60 + em;
 }
 
-process.on('uncaughtException', (error) => {
-    console.error('❌ Erro não capturado:', error);
-});
-
-process.on('unhandledRejection', (reason, promise) => {
-    console.error('❌ Promise rejeitada:', reason);
-});
-
-process.on('SIGINT', () => {
-    console.log('\n👋 Encerrando bot...');
-    closeReadline();
-    process.exit(0);
-});
+process.on('uncaughtException', e => console.error('❌', e));
+process.on('unhandledRejection', e => console.error('❌', e));
+process.on('SIGINT', () => { closeRl(); process.exit(0); });
 
 connectToWhatsApp();

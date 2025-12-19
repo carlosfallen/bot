@@ -56,11 +56,16 @@ class EmbeddingsManager {
                 patterns.push({ pattern, embedding });
             }
 
-            this.intentEmbeddings.set(name, { patterns, priority: data.priority || 1 });
-            console.log(`   ✓ ${name}: ${patterns.length} patterns`);
+            this.intentEmbeddings.set(name, {
+                patterns,
+                priority: data.priority || 1,
+                servico: data.servico,
+                categoria: data.categoria,
+                subcategoria: data.subcategoria
+            });
         }
 
-        console.log('✅ Embeddings gerados');
+        console.log(`✅ ${this.intentEmbeddings.size} intents processados`);
     }
 
     loadCache() {
@@ -70,10 +75,10 @@ class EmbeddingsManager {
             const cached = JSON.parse(fs.readFileSync(this.cachePath, 'utf8'));
             const { intents } = require('./intents.js');
             
-            const currentHash = this.hash(JSON.stringify(Object.keys(intents).map(k => intents[k].patterns)));
+            const currentHash = this.hash(JSON.stringify(intents));
             
             if (cached.hash !== currentHash) {
-                console.log('⚠️  Patterns mudaram, regenerando...');
+                console.log('⚠️  Intents mudaram, regenerando...');
                 return false;
             }
 
@@ -83,7 +88,7 @@ class EmbeddingsManager {
 
             console.log('✅ Cache carregado');
             return true;
-        } catch (error) {
+        } catch {
             return false;
         }
     }
@@ -94,15 +99,14 @@ class EmbeddingsManager {
             if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 
             const { intents } = require('./intents.js');
-            const hash = this.hash(JSON.stringify(Object.keys(intents).map(k => intents[k].patterns)));
 
             fs.writeFileSync(this.cachePath, JSON.stringify({
-                hash,
+                hash: this.hash(JSON.stringify(intents)),
                 embeddings: Object.fromEntries(this.intentEmbeddings)
             }));
 
             console.log('💾 Cache salvo');
-        } catch (error) {
+        } catch {
             console.log('⚠️  Erro ao salvar cache');
         }
     }
@@ -131,15 +135,15 @@ class EmbeddingsManager {
 
         const inputEmb = await this.getEmbedding(text.toLowerCase());
 
-        let best = { intent: null, confidence: 0, pattern: null };
+        let best = { intent: null, confidence: 0, data: null };
 
         for (const [name, data] of this.intentEmbeddings.entries()) {
             for (const { pattern, embedding } of data.patterns) {
                 const sim = this.cosineSimilarity(inputEmb, embedding);
-                const score = sim + (data.priority || 1) * 0.02;
+                const score = sim + (data.priority || 1) * 0.015;
 
                 if (score > best.confidence) {
-                    best = { intent: name, confidence: Math.min(score, 1.0), pattern };
+                    best = { intent: name, confidence: Math.min(score, 1.0), data };
                 }
             }
         }
