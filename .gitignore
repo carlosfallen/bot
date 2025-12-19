@@ -21,6 +21,5 @@ auth_info/
 .DS_Store
 Thumbs.db
 .claude
-scripts
 
 package-lock.json
