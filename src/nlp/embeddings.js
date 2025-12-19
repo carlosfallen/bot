@@ -1,13 +1,14 @@
+
+// FILE: src/nlp/embeddings.js
 const path = require('path');
 const fs = require('fs');
 
 class EmbeddingsManager {
     constructor() {
-        this.model = null;
-        this.tokenizer = null;
+        this.extractor = null;
         this.intentEmbeddings = new Map();
         this.isReady = false;
-        this.embeddingsCachePath = path.join(process.cwd(), 'data', 'embeddings-cache.json');
+        this.cachePath = path.join(process.cwd(), 'data', 'embeddings-cache.json');
     }
 
     async initialize() {
@@ -22,13 +23,11 @@ class EmbeddingsManager {
                 quantized: true
             });
 
-            console.log('✅ Modelo carregado com sucesso');
+            console.log('✅ Modelo carregado');
 
-            if (this.loadCachedEmbeddings()) {
-                console.log('✅ Embeddings carregados do cache');
-            } else {
-                await this.generateIntentEmbeddings();
-                this.saveCachedEmbeddings();
+            if (!this.loadCache()) {
+                await this.generateEmbeddings();
+                this.saveCache();
             }
 
             this.isReady = true;
@@ -39,160 +38,114 @@ class EmbeddingsManager {
     }
 
     async getEmbedding(text) {
-        if (!this.extractor) {
-            throw new Error('Modelo não inicializado');
-        }
-
         const output = await this.extractor(text, { pooling: 'mean', normalize: true });
         return Array.from(output.data);
     }
 
-    async generateIntentEmbeddings() {
+    async generateEmbeddings() {
         const { intents } = require('./intents.js');
 
-        console.log('📊 Gerando embeddings para intents...');
+        console.log('📊 Gerando embeddings...');
 
-        for (const [intentName, intentData] of Object.entries(intents)) {
-            if (!intentData.patterns || intentData.patterns.length === 0) continue;
+        for (const [name, data] of Object.entries(intents)) {
+            if (!data.patterns || data.patterns.length === 0) continue;
 
-            const patternEmbeddings = [];
-
-            for (const pattern of intentData.patterns) {
+            const patterns = [];
+            for (const pattern of data.patterns) {
                 const embedding = await this.getEmbedding(pattern);
-                patternEmbeddings.push({
-                    pattern,
-                    embedding
-                });
+                patterns.push({ pattern, embedding });
             }
 
-            this.intentEmbeddings.set(intentName, {
-                patterns: patternEmbeddings,
-                priority: intentData.priority || 1
-            });
-
-            console.log(`   ✓ ${intentName}: ${patternEmbeddings.length} patterns`);
+            this.intentEmbeddings.set(name, { patterns, priority: data.priority || 1 });
+            console.log(`   ✓ ${name}: ${patterns.length} patterns`);
         }
 
-        console.log('✅ Embeddings gerados com sucesso');
+        console.log('✅ Embeddings gerados');
     }
 
-    loadCachedEmbeddings() {
+    loadCache() {
         try {
-            if (!fs.existsSync(this.embeddingsCachePath)) {
-                return false;
-            }
+            if (!fs.existsSync(this.cachePath)) return false;
 
-            const cached = JSON.parse(fs.readFileSync(this.embeddingsCachePath, 'utf8'));
-            
+            const cached = JSON.parse(fs.readFileSync(this.cachePath, 'utf8'));
             const { intents } = require('./intents.js');
-            const currentPatterns = JSON.stringify(
-                Object.entries(intents).map(([k, v]) => [k, v.patterns])
-            );
             
-            if (cached.patternsHash !== this.hashString(currentPatterns)) {
-                console.log('⚠️  Intents modificados, regenerando embeddings...');
+            const currentHash = this.hash(JSON.stringify(Object.keys(intents).map(k => intents[k].patterns)));
+            
+            if (cached.hash !== currentHash) {
+                console.log('⚠️  Patterns mudaram, regenerando...');
                 return false;
             }
 
-            for (const [intentName, data] of Object.entries(cached.embeddings)) {
-                this.intentEmbeddings.set(intentName, data);
+            for (const [name, data] of Object.entries(cached.embeddings)) {
+                this.intentEmbeddings.set(name, data);
             }
 
+            console.log('✅ Cache carregado');
             return true;
         } catch (error) {
-            console.log('⚠️  Erro ao carregar cache:', error.message);
             return false;
         }
     }
 
-    saveCachedEmbeddings() {
+    saveCache() {
         try {
-            const dir = path.dirname(this.embeddingsCachePath);
-            if (!fs.existsSync(dir)) {
-                fs.mkdirSync(dir, { recursive: true });
-            }
+            const dir = path.dirname(this.cachePath);
+            if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 
             const { intents } = require('./intents.js');
-            const currentPatterns = JSON.stringify(
-                Object.entries(intents).map(([k, v]) => [k, v.patterns])
-            );
+            const hash = this.hash(JSON.stringify(Object.keys(intents).map(k => intents[k].patterns)));
 
-            const cache = {
-                patternsHash: this.hashString(currentPatterns),
-                generatedAt: new Date().toISOString(),
+            fs.writeFileSync(this.cachePath, JSON.stringify({
+                hash,
                 embeddings: Object.fromEntries(this.intentEmbeddings)
-            };
+            }));
 
-            fs.writeFileSync(this.embeddingsCachePath, JSON.stringify(cache));
-            console.log('💾 Embeddings salvos em cache');
+            console.log('💾 Cache salvo');
         } catch (error) {
-            console.log('⚠️  Erro ao salvar cache:', error.message);
+            console.log('⚠️  Erro ao salvar cache');
         }
     }
 
-    hashString(str) {
-        let hash = 0;
+    hash(str) {
+        let h = 0;
         for (let i = 0; i < str.length; i++) {
-            const char = str.charCodeAt(i);
-            hash = ((hash << 5) - hash) + char;
-            hash = hash & hash;
+            h = ((h << 5) - h) + str.charCodeAt(i);
+            h = h & h;
         }
-        return hash.toString(16);
+        return h.toString(16);
     }
 
-    cosineSimilarity(vecA, vecB) {
-        let dotProduct = 0;
-        let normA = 0;
-        let normB = 0;
-
-        for (let i = 0; i < vecA.length; i++) {
-            dotProduct += vecA[i] * vecB[i];
-            normA += vecA[i] * vecA[i];
-            normB += vecB[i] * vecB[i];
+    cosineSimilarity(a, b) {
+        let dot = 0, normA = 0, normB = 0;
+        for (let i = 0; i < a.length; i++) {
+            dot += a[i] * b[i];
+            normA += a[i] * a[i];
+            normB += b[i] * b[i];
         }
-
-        normA = Math.sqrt(normA);
-        normB = Math.sqrt(normB);
-
-        if (normA === 0 || normB === 0) return 0;
-
-        return dotProduct / (normA * normB);
+        return dot / (Math.sqrt(normA) * Math.sqrt(normB));
     }
 
     async findBestIntent(text) {
-        if (!this.isReady) {
-            await this.initialize();
-        }
+        if (!this.isReady) await this.initialize();
 
-        const inputEmbedding = await this.getEmbedding(text.toLowerCase());
+        const inputEmb = await this.getEmbedding(text.toLowerCase());
 
-        let bestIntent = null;
-        let bestScore = 0;
-        let bestPattern = null;
+        let best = { intent: null, confidence: 0, pattern: null };
 
-        for (const [intentName, intentData] of this.intentEmbeddings.entries()) {
-            for (const { pattern, embedding } of intentData.patterns) {
-                const similarity = this.cosineSimilarity(inputEmbedding, embedding);
-                
-                const priorityBonus = (intentData.priority || 1) * 0.02;
-                const adjustedScore = similarity + priorityBonus;
+        for (const [name, data] of this.intentEmbeddings.entries()) {
+            for (const { pattern, embedding } of data.patterns) {
+                const sim = this.cosineSimilarity(inputEmb, embedding);
+                const score = sim + (data.priority || 1) * 0.02;
 
-                if (adjustedScore > bestScore) {
-                    bestScore = adjustedScore;
-                    bestIntent = intentName;
-                    bestPattern = pattern;
+                if (score > best.confidence) {
+                    best = { intent: name, confidence: Math.min(score, 1.0), pattern };
                 }
             }
         }
 
-        return {
-            intent: bestIntent,
-            confidence: Math.min(bestScore, 1.0),
-            matchedPattern: bestPattern
-        };
+        return best;
     }
 }
 
-const embeddingsManager = new EmbeddingsManager();
-
-module.exports = embeddingsManager;
+module.exports = new EmbeddingsManager();

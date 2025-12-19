@@ -1,15 +1,19 @@
 // FILE: src/nlp/analyzer.js
+/**
+ * Analisador NLP com controle de estado
+ * Decide resposta baseado no ESTADO + INTENÇÃO
+ */
+
 const { intents, contextKeywords } = require('./intents.js');
+const { getResponse } = require('./responses.js');
+const conversationState = require('./state.js');
 const embeddingsManager = require('./embeddings.js');
 
 class NLPAnalyzer {
     constructor() {
-        this.conversationContext = new Map();
-        this.userSessions = new Map();
-        this.pendingLeadData = new Map();
         this.useEmbeddings = true;
         this.embeddingsReady = false;
-        this.similarityThreshold = 0.45;
+        this.similarityThreshold = 0.55;
     }
 
     async initializeEmbeddings() {
@@ -20,7 +24,7 @@ class NLPAnalyzer {
             this.embeddingsReady = true;
             console.log('✅ NLP com embeddings ativo');
         } catch (error) {
-            console.log('⚠️  Embeddings não disponível, usando fallback');
+            console.log('⚠️  Usando fallback (sem embeddings)');
             this.useEmbeddings = false;
         }
     }
@@ -35,292 +39,347 @@ class NLPAnalyzer {
             .trim();
     }
 
-    async identifyIntent(text, userId) {
+    isShortMessage(text) {
+        const words = this.normalize(text).split(' ').filter(w => w);
+        return words.length <= 3;
+    }
+
+    isNumericChoice(text) {
+        return /^[1-3]$/.test(this.normalize(text).trim());
+    }
+
+    // ==================== DETECÇÃO DE INTENÇÃO ====================
+    async detectIntent(text, userId) {
         const normalized = this.normalize(text);
-        const context = this.conversationContext.get(userId);
+        const state = conversationState.getState(userId);
+        const isShort = this.isShortMessage(text);
 
-        if (this.useEmbeddings && this.embeddingsReady) {
+        // 1. Escolha numérica (1, 2, 3)
+        if (this.isNumericChoice(normalized)) {
+            const choice = parseInt(normalized);
+            const map = { 1: 'traffic', 2: 'marketing', 3: 'web_development' };
+            if (state.ultimoTopico === 'menu' && map[choice]) {
+                return { intent: map[choice], confidence: 1.0, method: 'numeric_choice' };
+            }
+        }
+
+        // 2. Confirmação/Negação curta
+        if (isShort) {
+            const confirmWords = ['sim', 's', 'ok', 'beleza', 'quero', 'isso', 'claro', 'bora', 'vamos', 'pode', 'show', 'top'];
+            const negWords = ['nao', 'n', 'depois', 'nope'];
+
+            if (confirmWords.includes(normalized)) {
+                return { intent: 'affirmative', confidence: 0.95, method: 'short_confirm' };
+            }
+            if (negWords.includes(normalized)) {
+                return { intent: 'negative', confidence: 0.95, method: 'short_negative' };
+            }
+        }
+
+        // 3. Embeddings para mensagens maiores
+        if (this.useEmbeddings && this.embeddingsReady && !isShort) {
             const result = await embeddingsManager.findBestIntent(normalized);
-
             if (result.intent && result.confidence >= this.similarityThreshold) {
-                console.log(`   📐 Embedding match: ${result.intent} (${(result.confidence * 100).toFixed(1)}%) - "${result.matchedPattern}"`);
+                return { intent: result.intent, confidence: result.confidence, method: 'embeddings' };
+            }
+        }
+
+        // 4. Fallback com patterns
+        return this.fallbackDetect(normalized);
+    }
+
+    fallbackDetect(normalized) {
+        let bestIntent = null;
+        let bestScore = 0;
+
+        for (const [name, data] of Object.entries(intents)) {
+            if (!data.patterns) continue;
+
+            for (const pattern of data.patterns) {
+                const p = this.normalize(pattern);
                 
-                return {
-                    intent: result.intent,
-                    confidence: result.confidence,
-                    normalized,
-                    method: 'embeddings'
-                };
+                if (normalized === p) {
+                    const score = 1.0 + (data.priority || 1) * 0.01;
+                    if (score > bestScore) {
+                        bestScore = score;
+                        bestIntent = name;
+                    }
+                } else if (normalized.includes(p) && p.length >= 3) {
+                    const score = 0.7 + (p.length / normalized.length) * 0.2;
+                    if (score > bestScore) {
+                        bestScore = score;
+                        bestIntent = name;
+                    }
+                }
             }
-        }
-
-        const fallbackResult = this.fallbackIdentify(normalized);
-
-        if (context && (!fallbackResult.intent || fallbackResult.confidence < 0.6)) {
-            const contextualIntent = this.resolveContextualIntent(normalized, context, userId);
-            if (contextualIntent) {
-                return {
-                    intent: contextualIntent.intent,
-                    confidence: contextualIntent.confidence,
-                    normalized,
-                    method: 'context'
-                };
-            }
-        }
-
-        if (this.isLeadInfoResponse(text, userId)) {
-            return {
-                intent: 'lead_info',
-                confidence: 0.9,
-                normalized,
-                method: 'lead_capture'
-            };
         }
 
         return {
-            ...fallbackResult,
-            normalized,
+            intent: bestIntent || 'unknown',
+            confidence: Math.min(bestScore, 1.0),
             method: 'fallback'
         };
     }
 
-    fallbackIdentify(normalized) {
-        let bestMatch = null;
-        let bestScore = 0;
-
-        for (const [intentName, intentData] of Object.entries(intents)) {
-            if (!intentData.patterns || intentData.patterns.length === 0) continue;
-
-            for (const pattern of intentData.patterns) {
-                const normalizedPattern = this.normalize(pattern);
-
-                if (normalized.includes(normalizedPattern)) {
-                    const lengthBonus = normalizedPattern.split(' ').length * 0.1;
-                    const score = 0.8 + lengthBonus + (intentData.priority || 1) * 0.02;
-
-                    if (score > bestScore) {
-                        bestScore = score;
-                        bestMatch = intentName;
-                    }
-                }
-            }
-        }
-
-        return {
-            intent: bestMatch || 'unknown',
-            confidence: Math.min(bestScore, 1.0)
-        };
-    }
-
-    resolveContextualIntent(text, context, userId) {
-        const affirmativeWords = ['sim', 's', 'quero', 'ok', 'claro', 'aceito', 'isso', 'beleza', 'pode', 'bora'];
-        const negativeWords = ['nao', 'não', 'n', 'depois', 'agora nao', 'agora não'];
-
-        const isAffirmative = affirmativeWords.some(w => text.includes(w));
-        const isNegative = negativeWords.some(w => text.includes(w));
-
-        if (isAffirmative && !isNegative) {
-            if (['services', 'pricing', 'portfolio'].includes(context)) {
-                return { intent: 'interested', confidence: 0.85 };
-            }
-            return { intent: 'affirmative', confidence: 0.8 };
-        }
-
-        if (isNegative) {
-            return { intent: 'negative', confidence: 0.85 };
-        }
-
-        return null;
-    }
-
-    isLeadInfoResponse(text, userId) {
-        const context = this.conversationContext.get(userId);
-        if (context !== 'lead_capture') return false;
-
-        const lines = text.split('\n').filter(l => l.trim());
-        const entities = this.extractEntities(text);
-
-        return lines.length >= 2 || Object.keys(entities).length >= 1;
-    }
-
+    // ==================== EXTRAÇÃO DE ENTIDADES ====================
     extractEntities(text) {
         const entities = {};
 
-        const emailRegex = /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b/i;
-        const emailMatch = text.match(emailRegex);
-        if (emailMatch) {
-            entities.email = emailMatch[0].toLowerCase();
-        }
+        // Email
+        const email = text.match(/\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b/i);
+        if (email) entities.email = email[0].toLowerCase();
 
-        const phoneRegex = /(?:\+?55\s?)?(?:\(?0?\d{2}\)?\s?)?\d{4,5}[-\s]?\d{4}/;
-        const phoneMatch = text.match(phoneRegex);
-        if (phoneMatch) {
-            entities.phone = phoneMatch[0].replace(/\D/g, '');
-        }
+        // Telefone
+        const phone = text.match(/(?:\+?55\s?)?(?:\(?0?\d{2}\)?\s?)?\d{4,5}[-\s]?\d{4}/);
+        if (phone) entities.phone = phone[0].replace(/\D/g, '');
 
+        // Nome (linhas de texto sem números)
         const lines = text.split('\n').map(l => l.trim()).filter(l => l);
-
         if (lines.length >= 1) {
-            const firstLine = lines[0];
-            if (!emailMatch || !firstLine.includes('@')) {
-                if (!phoneMatch || !firstLine.match(/\d{4,}/)) {
-                    if (firstLine.length > 1 && firstLine.length < 50) {
-                        const cleanName = firstLine.replace(/[^\w\s]/g, '').trim();
-                        if (cleanName && !cleanName.match(/^\d+$/)) {
-                            entities.name = this.capitalizeWords(cleanName);
-                        }
-                    }
+            const first = lines[0];
+            if (!first.includes('@') && !first.match(/\d{4,}/) && first.length < 50) {
+                const clean = first.replace(/[^\w\s]/g, '').trim();
+                if (clean && !clean.match(/^\d+$/)) {
+                    entities.name = clean.split(' ').map(w => 
+                        w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()
+                    ).join(' ');
                 }
             }
         }
 
-        if (lines.length >= 2) {
-            const secondLine = lines[1];
-            if (!secondLine.includes('@') && !secondLine.match(/\d{4,}/)) {
-                if (secondLine.length > 1 && secondLine.length < 50) {
-                    entities.company = secondLine;
-                }
-            }
-        }
-
-        if (lines.length >= 3) {
-            const thirdLine = lines[2].toLowerCase();
-            const services = ['site', 'landing', 'trafego', 'tráfego', 'marketing', 'ecommerce', 'loja'];
-            for (const service of services) {
-                if (thirdLine.includes(service)) {
-                    entities.service = thirdLine;
-                    break;
-                }
-            }
-            if (!entities.service && thirdLine.length > 2) {
-                entities.service = thirdLine;
-            }
+        // Empresa
+        if (lines.length >= 2 && !lines[1].includes('@') && !lines[1].match(/\d{4,}/)) {
+            entities.company = lines[1];
         }
 
         return entities;
     }
 
-    capitalizeWords(str) {
-        return str.split(' ')
-            .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
-            .join(' ');
-    }
+    // ==================== DECISÃO DE RESPOSTA ====================
+    decideResponse(intent, state, entities) {
+        const { stage, assunto, jaApresentou, jaMostrouPreco, jaPediuDados, ultimoTopico } = state;
 
-    detectUrgency(text) {
-        const normalized = this.normalize(text);
-        return contextKeywords.urgency.some(keyword => normalized.includes(keyword));
-    }
-
-    detectBudgetConcern(text) {
-        const normalized = this.normalize(text);
-        return contextKeywords.budget.some(keyword => normalized.includes(keyword));
-    }
-
-    async analyze(text, userId) {
-        if (!this.embeddingsReady && this.useEmbeddings) {
-            await this.initializeEmbeddings();
-        }
-
-        const { intent, confidence, normalized, method } = await this.identifyIntent(text, userId);
-        const entities = this.extractEntities(text);
-        const isUrgent = this.detectUrgency(text);
-        const budgetConcern = this.detectBudgetConcern(text);
-
-        if (Object.keys(entities).length > 0) {
-            const existing = this.pendingLeadData.get(userId) || {};
-            this.pendingLeadData.set(userId, { ...existing, ...entities });
-        }
-
-        const response = this.getResponse(intent, userId, entities);
-
-        if (intents[intent]?.context) {
-            this.conversationContext.set(userId, intents[intent].context);
-        }
-
-        this.updateSession(userId, {
-            lastIntent: intent,
-            lastMessage: text,
-            timestamp: Date.now()
-        });
-
-        const collectedEntities = this.pendingLeadData.get(userId) || {};
-        const finalEntities = { ...collectedEntities, ...entities };
-
-        return {
-            intent,
-            confidence,
-            response,
-            entities: finalEntities,
-            context: {
-                isUrgent,
-                budgetConcern
-            },
-            method,
-            shouldCollectData: intents[intent]?.collectData || Object.keys(entities).length > 0
-        };
-    }
-
-    getResponse(intent, userId, entities) {
-        const intentData = intents[intent];
-
-        if (!intentData) {
-            return this.getDefaultResponse();
-        }
-
-        if (intent === 'lead_info' && entities.name) {
-            return `Anotado, ${entities.name}! Vou passar pro time e alguém entra em contato em breve.
-
-Precisa de mais alguma coisa?`;
-        }
-
-        if (Array.isArray(intentData.responses)) {
-            const randomIndex = Math.floor(Math.random() * intentData.responses.length);
-            return intentData.responses[randomIndex];
-        }
-
-        return intentData.responses;
-    }
-
-    getDefaultResponse() {
-        return `Não consegui entender direito. 😅
-
-Me conta de outra forma o que você tá buscando, ou digita *menu* pra ver as opções.`;
-    }
-
-    updateSession(userId, data) {
-        const session = this.userSessions.get(userId) || {
-            messages: [],
-            startTime: Date.now()
-        };
-
-        session.messages.push(data);
-        session.lastActivity = Date.now();
-
-        this.userSessions.set(userId, session);
-    }
-
-    getSession(userId) {
-        return this.userSessions.get(userId);
-    }
-
-    cleanOldSessions() {
-        const now = Date.now();
-        const timeout = 30 * 60 * 1000;
-
-        for (const [userId, session] of this.userSessions.entries()) {
-            if (now - session.lastActivity > timeout) {
-                this.userSessions.delete(userId);
-                this.conversationContext.delete(userId);
-                this.pendingLeadData.delete(userId);
+        // GREETING
+        if (intent === 'greeting') {
+            if (jaApresentou) {
+                return getResponse('greeting', 'ja_conhece');
             }
+            return getResponse('greeting', 'primeiro_contato');
+        }
+
+        // GOODBYE
+        if (intent === 'goodbye') {
+            return getResponse('goodbye', 'padrao');
+        }
+
+        // THANKS
+        if (intent === 'thanks') {
+            return getResponse('thanks', 'padrao');
+        }
+
+        // PRICING - resposta baseada no assunto atual
+        if (intent === 'pricing') {
+            if (assunto === 'site') return getResponse('pricing', 'site');
+            if (assunto === 'landing') return getResponse('pricing', 'landing');
+            if (assunto === 'trafego') return getResponse('pricing', 'trafego');
+            if (assunto === 'marketing') return getResponse('pricing', 'marketing');
+            return getResponse('pricing', 'generico');
+        }
+
+        // SERVIÇOS
+        if (intent === 'web_development' || intent === 'simple_site') {
+            if (ultimoTopico === 'web_development') {
+                return getResponse('web_development', 'detalhamento');
+            }
+            return getResponse('web_development', 'inicial');
+        }
+
+        if (intent === 'landing') {
+            return getResponse('landing', 'inicial');
+        }
+
+        if (intent === 'traffic') {
+            if (ultimoTopico === 'traffic') {
+                return getResponse('trafego', 'detalhamento');
+            }
+            return getResponse('trafego', 'inicial');
+        }
+
+        if (intent === 'marketing') {
+            if (ultimoTopico === 'marketing') {
+                return getResponse('marketing', 'detalhamento');
+            }
+            return getResponse('marketing', 'inicial');
+        }
+
+        // CONFIRMAÇÃO - depende do contexto anterior
+        if (intent === 'affirmative') {
+            // Após mostrar preço → pedir dados
+            if (jaMostrouPreco && !jaPediuDados) {
+                return getResponse('lead_capture', 'primeira_vez');
+            }
+            // Após falar de serviço → continuar
+            if (assunto) {
+                return getResponse('affirmative', 'apos_servico');
+            }
+            return getResponse('affirmative', 'continuar_assunto');
+        }
+
+        // NEGAÇÃO
+        if (intent === 'negative') {
+            return getResponse('negative', 'padrao');
+        }
+
+        // PROPOSTA
+        if (intent === 'send_proposal') {
+            if (jaPediuDados) {
+                return 'Pode me passar seu nome e empresa?';
+            }
+            return getResponse('lead_capture', 'primeira_vez');
+        }
+
+        // EXPLICAÇÃO
+        if (intent === 'explain') {
+            if (assunto === 'site') return getResponse('explain', 'site');
+            if (assunto === 'landing') return getResponse('explain', 'landing');
+            if (assunto === 'trafego') return getResponse('explain', 'trafego');
+            if (assunto === 'marketing') return getResponse('explain', 'marketing');
+            return getResponse('menu', 'primeira_vez');
+        }
+
+        // MENU
+        if (intent === 'menu') {
+            if (jaApresentou) {
+                return getResponse('menu', 'ja_viu');
+            }
+            return getResponse('menu', 'primeira_vez');
+        }
+
+        // URGÊNCIA
+        if (intent === 'urgency') {
+            return getResponse('urgency', 'padrao');
+        }
+
+        // PORTFOLIO
+        if (intent === 'portfolio') {
+            return getResponse('portfolio', 'padrao');
+        }
+
+        // SCHEDULE
+        if (intent === 'schedule') {
+            return getResponse('schedule', 'padrao');
+        }
+
+        // CONTACT
+        if (intent === 'contact') {
+            return 'Pode falar comigo por aqui mesmo, é mais rápido. Em que posso ajudar?';
+        }
+
+        // DADOS DO LEAD
+        if (entities.name && (stage === 'fechamento' || jaPediuDados)) {
+            let resp = getResponse('lead_received', 'padrao');
+            return resp.replace('$NOME', entities.name);
+        }
+
+        // UNKNOWN
+        return getResponse('unknown', 'padrao');
+    }
+
+    // ==================== ATUALIZAR ESTADO ====================
+    updateStateAfterIntent(userId, intent, entities) {
+        const state = conversationState.getState(userId);
+        const updates = {};
+
+        // Marcar que já apresentou
+        if (intent === 'greeting') {
+            updates.jaApresentou = true;
+        }
+
+        // Definir assunto
+        const assuntoMap = {
+            'web_development': 'site',
+            'simple_site': 'site',
+            'landing': 'landing',
+            'traffic': 'trafego',
+            'marketing': 'marketing'
+        };
+        if (assuntoMap[intent]) {
+            updates.assunto = assuntoMap[intent];
+            updates.stage = 'exploracao';
+        }
+
+        // Marcar que mostrou preço
+        if (intent === 'pricing') {
+            updates.jaMostrouPreco = true;
+            updates.stage = 'detalhamento';
+        }
+
+        // Marcar que pediu dados
+        if (intent === 'send_proposal' || intent === 'affirmative' && state.jaMostrouPreco) {
+            updates.jaPediuDados = true;
+            updates.stage = 'fechamento';
+        }
+
+        // Recebeu dados do lead
+        if (entities.name) {
+            updates.stage = 'fechamento';
+        }
+
+        // Último tópico
+        updates.ultimoTopico = intent;
+
+        conversationState.updateState(userId, updates);
+        conversationState.addToHistory(userId, intent, '');
+    }
+
+    // ==================== ANÁLISE PRINCIPAL ====================
+    async analyze(text, userId) {
+        try {
+            if (!this.embeddingsReady && this.useEmbeddings) {
+                await this.initializeEmbeddings();
+            }
+
+            const state = conversationState.getState(userId);
+            const { intent, confidence, method } = await this.detectIntent(text, userId);
+            const entities = this.extractEntities(text);
+
+            console.log(`   🔍 Estado: stage=${state.stage}, assunto=${state.assunto || 'null'}`);
+            console.log(`   🎯 Intent: ${intent} (${(confidence * 100).toFixed(0)}%) [${method}]`);
+
+            // Decidir resposta baseada no estado
+            const response = this.decideResponse(intent, state, entities);
+
+            // Atualizar estado
+            this.updateStateAfterIntent(userId, intent, entities);
+
+            return {
+                intent,
+                confidence,
+                response,
+                entities,
+                method,
+                context: {
+                    isUrgent: contextKeywords.urgency.some(k => this.normalize(text).includes(k)),
+                    budgetConcern: contextKeywords.budget.some(k => this.normalize(text).includes(k))
+                },
+                shouldCollectData: Object.keys(entities).length > 0
+            };
+
+        } catch (error) {
+            console.error('❌ Erro em analyze:', error);
+            return {
+                intent: 'unknown',
+                confidence: 0,
+                response: 'Desculpa, tive um problema. Pode repetir?',
+                entities: {},
+                method: 'error',
+                context: {},
+                shouldCollectData: false
+            };
         }
     }
 }
 
 const nlpAnalyzer = new NLPAnalyzer();
-
-setInterval(() => {
-    nlpAnalyzer.cleanOldSessions();
-}, 5 * 60 * 1000);
 
 module.exports = nlpAnalyzer;
