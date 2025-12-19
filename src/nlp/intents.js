@@ -1,269 +1,265 @@
-// Sistema de Intents para NLP
-// Define todas as intenções do usuário e suas respostas
-
 const intents = {
-    // Saudações
     greeting: {
         patterns: [
             'oi', 'olá', 'ola', 'hey', 'hi', 'hello',
             'bom dia', 'boa tarde', 'boa noite',
-            'opa', 'e ai', 'eai', 'salve'
+            'opa', 'e ai', 'eai', 'salve', 'fala',
+            'opa tudo bem', 'oi tudo bem', 'olá tudo bem'
         ],
         responses: [
-            'Olá! 👋 Bem-vindo à nossa agência digital! Como posso ajudar você hoje?',
-            'Oi! Tudo bem? Sou o assistente virtual da agência. Como posso te auxiliar?',
-            'Olá! 😊 Posso te ajudar com Tráfego Pago, Marketing Digital ou Desenvolvimento Web!'
+            `Oi! 👋 A gente trabalha com tráfego pago, marketing digital e criação de sites. Me conta o que você tá buscando.`
         ],
-        context: 'greeting'
+        context: 'greeting',
+        priority: 1
     },
 
-    // Despedidas
     goodbye: {
         patterns: [
             'tchau', 'até logo', 'falou', 'vlw', 'valeu',
-            'obrigado', 'obrigada', 'thanks', 'até mais'
+            'obrigado', 'obrigada', 'thanks', 'até mais',
+            'flw', 'abraço', 'abraco', 'brigado', 'brigada'
         ],
         responses: [
-            'Até logo! Foi um prazer ajudar. Qualquer dúvida, estamos aqui! 👋',
-            'Obrigado pelo contato! Até mais! 😊',
-            'Tchau! Se precisar, é só chamar! 🚀'
+            `Beleza! Qualquer coisa, só chamar aqui. 👋`
         ],
-        context: 'goodbye'
+        context: 'goodbye',
+        priority: 2
     },
 
-    // Tráfego Pago
-    traffic: {
-        patterns: [
-            'trafego', 'tráfego', 'anuncio', 'anúncio', 'ads',
-            'facebook ads', 'google ads', 'meta ads',
-            'campanhas', 'anunciar', 'publicidade'
-        ],
-        responses: [
-            `🎯 *TRÁFEGO PAGO*
-
-Criamos e gerenciamos campanhas otimizadas de:
-
-• 📱 *Meta Ads* (Facebook e Instagram)
-• 🔍 *Google Ads* (Pesquisa e Display)
-• 📊 *LinkedIn Ads*
-• 🎥 *YouTube Ads*
-
-✅ ROI garantido
-✅ Relatórios semanais
-✅ Otimização contínua
-
-Quer um orçamento personalizado?`
-        ],
-        context: 'services',
-        followUp: true
-    },
-
-    // Marketing Digital
-    marketing: {
-        patterns: [
-            'marketing', 'redes sociais', 'instagram', 'facebook',
-            'social media', 'gestão de redes', 'posts',
-            'conteúdo', 'stories', 'engajamento'
-        ],
-        responses: [
-            `📱 *MARKETING DIGITAL*
-
-Gestão completa de redes sociais:
-
-• ✍️ *Criação de Conteúdo* estratégico
-• 📸 *Posts e Stories* profissionais
-• 💬 *Engajamento* com sua audiência
-• 📊 *Relatórios* de performance
-• 🎨 *Design* criativo e atrativo
-
-Pacotes a partir de R$ 997/mês.
-
-Gostaria de conhecer nossos planos?`
-        ],
-        context: 'services',
-        followUp: true
-    },
-
-    // Desenvolvimento Web
-    web_development: {
-        patterns: [
-            'site', 'website', 'desenvolvimento', 'desenvolver',
-            'landing page', 'loja virtual', 'ecommerce',
-            'sistema', 'aplicativo', 'app', 'portal'
-        ],
-        responses: [
-            `💻 *DESENVOLVIMENTO WEB*
-
-Criamos soluções digitais sob medida:
-
-• 🌐 *Sites Institucionais*
-• 🛒 *E-commerce* completo
-• 📄 *Landing Pages* de alta conversão
-• ⚙️ *Sistemas Personalizados*
-• 📱 *Apps Web Responsivos*
-
-Tecnologias modernas, SEO otimizado e design profissional.
-
-Quer ver nosso portfólio?`
-        ],
-        context: 'services',
-        followUp: true
-    },
-
-    // Preços e Orçamento
     pricing: {
         patterns: [
-            'preço', 'preco', 'valor', 'quanto custa',
-            'orçamento', 'orcamento', 'investimento',
-            'planos', 'pacotes', 'valores'
+            'preço', 'preco', 'valor', 'valores', 'quanto custa', 'quanto é',
+            'orçamento', 'orcamento', 'investimento', 'custo', 'custos',
+            'planos', 'pacotes', 'tabela', 'qual o valor', 'qual é o valor',
+            'qual e o valor', 'saber de valores', 'saber valores', 'saber o valor',
+            'quanto fica', 'quanto sai', 'quanto vai custar', 'quanto custa isso',
+            'me passa o valor', 'passa o valor', 'valor do', 'preço do',
+            'quanto cobram', 'quanto vocês cobram', 'quanto voces cobram',
+            'qual o preço da landing page', 'quanto custa um site',
+            'valor da landing page', 'preço do site', 'quanto custa landing page'
         ],
         responses: [
-            `💰 *PREÇOS E INVESTIMENTO*
+            `Os valores variam conforme o projeto, mas pra te dar uma ideia:
 
-Nossos valores variam de acordo com a necessidade:
+📱 Gestão de redes — a partir de R$ 997/mês
+🎯 Tráfego pago — a partir de R$ 1.500/mês
+💻 Sites — a partir de R$ 2.500
+🚀 Landing pages — a partir de R$ 997
 
-📱 *Gestão de Redes* - a partir de R$ 997/mês
-🎯 *Tráfego Pago* - a partir de R$ 1.500/mês
-💻 *Sites* - a partir de R$ 2.500
-🚀 *Landing Pages* - a partir de R$ 997
-
-Para um orçamento personalizado e detalhado, me informe:
-
-1️⃣ Qual serviço te interessa?
-2️⃣ Qual o objetivo principal?
-
-Assim posso passar valores exatos! 😊`
+Me conta qual desses te interessa que eu detalho melhor.`
         ],
         context: 'pricing',
-        followUp: true
+        followUp: true,
+        priority: 10
     },
 
-    // Portfólio
+    traffic: {
+        patterns: [
+            'trafego pago', 'tráfego pago', 'gestão de trafego', 'gestao de trafego',
+            'anuncio no facebook', 'anúncio no facebook', 'anuncio no instagram',
+            'facebook ads', 'google ads', 'meta ads', 'instagram ads',
+            'campanhas pagas', 'anunciar no google', 'anunciar no facebook',
+            'publicidade online', 'publicidade paga', 'impulsionar',
+            'patrocinar posts', 'patrocinar publicação', 'fazer anuncios',
+            'quero anunciar', 'preciso de anuncios', 'rodar campanhas'
+        ],
+        responses: [
+            `A gente cuida de campanhas no Meta (Facebook e Instagram) e Google Ads.
+
+Inclui criação, otimização e relatórios semanais. O foco é sempre no retorno do investimento.
+
+Se quiser, posso montar uma proposta pro seu caso.`
+        ],
+        context: 'services',
+        followUp: true,
+        priority: 8
+    },
+
+    marketing: {
+        patterns: [
+            'marketing digital', 'marketing', 'redes sociais', 'gestao de redes',
+            'gestão de redes', 'social media', 'posts para instagram',
+            'conteúdo para redes', 'conteudo para redes', 'stories',
+            'engajamento', 'gerenciar instagram', 'gerenciar redes',
+            'criar posts', 'criar conteudo', 'criar conteúdo',
+            'preciso de posts', 'quero postar mais', 'gestão do instagram'
+        ],
+        responses: [
+            `Fazemos a gestão completa das redes: posts, stories, engajamento e relatórios.
+
+Os pacotes começam em R$ 997/mês, dependendo da frequência de publicações.
+
+Quer que eu explique como funciona na prática?`
+        ],
+        context: 'services',
+        followUp: true,
+        priority: 8
+    },
+
+    web_development: {
+        patterns: [
+            'site', 'website', 'criar site', 'fazer site', 'desenvolvimento web',
+            'landing page', 'landingpage', 'pagina de vendas', 'página de vendas',
+            'loja virtual', 'ecommerce', 'e-commerce', 'loja online',
+            'sistema web', 'aplicativo', 'app', 'portal',
+            'quero um site', 'preciso de um site', 'fazer um site',
+            'criar uma landing', 'fazer uma landing', 'preciso de uma landing'
+        ],
+        responses: [
+            `Criamos sites institucionais, landing pages e lojas virtuais.
+
+As landing pages começam em R$ 997 e os sites a partir de R$ 2.500, dependendo do escopo.
+
+Qual tipo de projeto você tem em mente?`
+        ],
+        context: 'services',
+        followUp: true,
+        priority: 8
+    },
+
     portfolio: {
         patterns: [
-            'portfolio', 'portfólio', 'trabalhos',
-            'cases', 'clientes', 'projetos',
-            'exemplos', 'mostrar'
+            'portfolio', 'portfólio', 'trabalhos anteriores',
+            'cases', 'clientes', 'projetos realizados',
+            'exemplos', 'mostrar trabalhos', 'ver trabalhos',
+            'ja fizeram', 'já fizeram', 'resultados anteriores'
         ],
         responses: [
-            `🎨 *NOSSO PORTFÓLIO*
+            `Já atendemos mais de 150 clientes em diferentes segmentos.
 
-Temos orgulho dos resultados que geramos:
+Alguns resultados: e-commerce com +250% em vendas, clínica com +400% de agendamentos.
 
-✅ Mais de 150 clientes atendidos
-✅ R$ 2M+ em vendas geradas
-✅ 300%+ de ROI médio
-
-Principais cases:
-• E-commerce de moda - 250% de aumento em vendas
-• Clínica médica - 400% mais agendamentos
-• Loja de cosméticos - R$ 180k em 3 meses
-
-Acesse nosso site: [www.agencia.com.br/portfolio]
-
-Qual segmento te interessa mais?`
+Se quiser, posso te mostrar cases do seu setor.`
         ],
-        context: 'portfolio'
+        context: 'portfolio',
+        priority: 7
     },
 
-    // Contato
     contact: {
         patterns: [
-            'contato', 'telefone', 'email', 'whatsapp',
-            'falar com', 'atendente', 'humano',
-            'ligar', 'número'
+            'contato', 'telefone', 'email', 'whatsapp da empresa',
+            'falar com humano', 'falar com atendente', 'atendente humano',
+            'ligar', 'número da empresa', 'falar com alguem',
+            'falar com alguém', 'pessoa real', 'quero falar com alguem'
         ],
         responses: [
-            `📞 *FALE CONOSCO*
+            `Pode falar comigo mesmo por aqui, é o canal mais rápido.
 
-Estou aqui para ajudar, mas se preferir falar com nossa equipe:
+Se preferir, nosso time atende de segunda a sexta, das 9h às 18h.
 
-📱 WhatsApp: (11) 99999-9999
-📧 Email: contato@agencia.com.br
-🌐 Site: www.agencia.com.br
-
-⏰ *Horário de atendimento:*
-Segunda a Sexta - 9h às 18h
-
-Posso agendar um horário para você?`
+📧 contato@agencia.com.br
+📱 (11) 99999-9999`
         ],
-        context: 'contact'
+        context: 'contact',
+        priority: 7
     },
 
-    // Menu / Ajuda
     menu: {
         patterns: [
             'menu', 'ajuda', 'help', 'opções', 'opcoes',
-            'o que você faz', 'serviços', 'servicos'
+            'o que você faz', 'o que voce faz', 'serviços', 'servicos',
+            'como funciona', 'me ajuda', 'não entendi', 'nao entendi',
+            'quais serviços', 'o que vocês fazem'
         ],
         responses: [
-            `📋 *MENU DE SERVIÇOS*
+            `A gente trabalha com três frentes principais:
 
-Somos especialistas em:
+1. Tráfego pago (Meta e Google Ads)
+2. Gestão de redes sociais
+3. Criação de sites e landing pages
 
-1️⃣ 🎯 *Tráfego Pago* - Meta e Google Ads
-2️⃣ 📱 *Marketing Digital* - Gestão de Redes
-3️⃣ 💻 *Desenvolvimento Web* - Sites e Sistemas
-4️⃣ 💰 *Ver Preços* - Investimento
-5️⃣ 🎨 *Portfólio* - Cases de sucesso
-6️⃣ 📞 *Contato* - Fale conosco
-
-Digite o número ou nome do serviço que deseja conhecer!`
+Qual dessas faz mais sentido pra você?`
         ],
-        context: 'menu'
+        context: 'menu',
+        priority: 5
     },
 
-    // Agendamento
     schedule: {
         patterns: [
-            'agendar', 'reunião', 'reuniao', 'conversar',
-            'marcar', 'horário', 'horario', 'disponibilidade'
+            'agendar', 'reunião', 'reuniao', 'conversar pessoalmente',
+            'marcar horário', 'marcar horario', 'disponibilidade',
+            'agenda', 'call', 'videoconferencia', 'videochamada',
+            'quero agendar', 'podemos conversar', 'marcar uma conversa'
         ],
         responses: [
-            `📅 *AGENDAR REUNIÃO*
+            `Posso agendar uma conversa rápida com o time.
 
-Ótimo! Vamos agendar uma conversa com nossa equipe.
-
-Qual o melhor dia e horário para você?
-
-Exemplo: "Segunda-feira às 14h"
-
-Ou prefere que eu te passe nossos horários disponíveis?`
+Me passa o melhor dia e horário pra você que eu confirmo.`
         ],
         context: 'scheduling',
         followUp: true,
-        collectData: 'schedule_preference'
+        collectData: 'schedule_preference',
+        priority: 7
     },
 
-    // Interesse / Quero contratar
     interested: {
         patterns: [
-            'quero', 'tenho interesse', 'contratar',
-            'fechar', 'vamos', 'sim', 'aceito'
+            'quero contratar', 'tenho interesse', 'me interessa',
+            'fechar negocio', 'fechar negócio', 'vamos fechar',
+            'quero sim', 'aceito', 'bora', 'vamos la', 'vamos lá',
+            'pode ser', 'fechado', 'combinado', 'quero saber mais',
+            'me interesso', 'tenho interesse nisso'
         ],
         responses: [
-            `🎉 *EXCELENTE!*
+            `Boa! Pra montar uma proposta, preciso de algumas infos:
 
-Para te atender melhor, preciso de algumas informações:
+- Seu nome
+- Empresa (se tiver)
+- Qual serviço te interessou
 
-1️⃣ Qual seu nome?
-2️⃣ Nome da empresa (se tiver)
-3️⃣ Qual serviço deseja?
-
-Pode me mandar tudo numa mensagem só! 😊`
+Pode mandar tudo junto aqui.`
         ],
         context: 'lead_capture',
         followUp: true,
-        collectData: ['name', 'company', 'service']
+        collectData: ['name', 'company', 'service'],
+        priority: 9
+    },
+
+    affirmative: {
+        patterns: [
+            'sim', 's', 'isso', 'isso mesmo', 'exato', 'correto',
+            'com certeza', 'claro', 'ok', 'okay', 'beleza', 'blz',
+            'pode ser', 'quero', 'quero sim', 'yes', 'positivo',
+            'isso aí', 'perfeito', 'isso ai'
+        ],
+        responses: [
+            `Beleza! Me conta mais detalhes do que você precisa.`
+        ],
+        context: 'affirmative',
+        priority: 3
+    },
+
+    negative: {
+        patterns: [
+            'não', 'nao', 'n', 'nope', 'negativo', 'ainda não',
+            'ainda nao', 'depois', 'agora não', 'agora nao',
+            'no momento não', 'no momento nao', 'talvez depois',
+            'não quero', 'nao quero', 'não preciso'
+        ],
+        responses: [
+            `Sem problema. Se mudar de ideia, é só chamar aqui.`
+        ],
+        context: 'negative',
+        priority: 3
+    },
+
+    lead_info: {
+        patterns: [],
+        responses: [
+            `Anotado! Vou passar pro time e alguém entra em contato em breve.
+
+Precisa de mais alguma coisa?`
+        ],
+        context: 'lead_captured',
+        priority: 1
     }
 };
 
-// Palavras-chave de contexto para melhorar detecção
 const contextKeywords = {
-    urgency: ['urgente', 'rápido', 'hoje', 'agora', 'já'],
-    budget: ['barato', 'caro', 'investimento', 'pagar', 'custo'],
-    quality: ['melhor', 'qualidade', 'profissional', 'bom'],
-    comparison: ['comparar', 'diferença', 'concorrente', 'versus']
+    urgency: ['urgente', 'rápido', 'rapido', 'hoje', 'agora', 'já', 'ja', 'pressa', 'logo'],
+    budget: ['barato', 'caro', 'investimento', 'pagar', 'custo', 'orçamento', 'orcamento', 'verba'],
+    quality: ['melhor', 'qualidade', 'profissional', 'bom', 'excelente'],
+    comparison: ['comparar', 'diferença', 'diferenca', 'concorrente', 'versus', 'vs']
 };
 
 module.exports = { intents, contextKeywords };

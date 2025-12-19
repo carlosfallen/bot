@@ -1,197 +1,278 @@
-// Analisador NLP - Processa mensagens e identifica intenções
-
+// FILE: src/nlp/analyzer.js
 const { intents, contextKeywords } = require('./intents.js');
+const embeddingsManager = require('./embeddings.js');
 
 class NLPAnalyzer {
     constructor() {
-        this.conversationContext = new Map(); // Armazena contexto por usuário
-        this.userSessions = new Map(); // Sessões de usuário
+        this.conversationContext = new Map();
+        this.userSessions = new Map();
+        this.pendingLeadData = new Map();
+        this.useEmbeddings = true;
+        this.embeddingsReady = false;
+        this.similarityThreshold = 0.45;
     }
 
-    // Normalizar texto para análise
+    async initializeEmbeddings() {
+        if (this.embeddingsReady) return;
+
+        try {
+            await embeddingsManager.initialize();
+            this.embeddingsReady = true;
+            console.log('✅ NLP com embeddings ativo');
+        } catch (error) {
+            console.log('⚠️  Embeddings não disponível, usando fallback');
+            this.useEmbeddings = false;
+        }
+    }
+
     normalize(text) {
         return text
             .toLowerCase()
             .normalize('NFD')
-            .replace(/[\u0300-\u036f]/g, '') // Remove acentos
-            .replace(/[^\w\s]/g, ' ') // Remove pontuação
+            .replace(/[\u0300-\u036f]/g, '')
+            .replace(/[^\w\s@.]/g, ' ')
+            .replace(/\s+/g, ' ')
             .trim();
     }
 
-    // Calcular similaridade entre texto e padrão
-    calculateSimilarity(text, pattern) {
-        const textWords = text.split(/\s+/);
-        const patternWords = pattern.split(/\s+/);
+    async identifyIntent(text, userId) {
+        const normalized = this.normalize(text);
+        const context = this.conversationContext.get(userId);
 
-        let matches = 0;
-        for (const word of patternWords) {
-            if (textWords.some(tw => tw.includes(word) || word.includes(tw))) {
-                matches++;
+        if (this.useEmbeddings && this.embeddingsReady) {
+            const result = await embeddingsManager.findBestIntent(normalized);
+
+            if (result.intent && result.confidence >= this.similarityThreshold) {
+                console.log(`   📐 Embedding match: ${result.intent} (${(result.confidence * 100).toFixed(1)}%) - "${result.matchedPattern}"`);
+                
+                return {
+                    intent: result.intent,
+                    confidence: result.confidence,
+                    normalized,
+                    method: 'embeddings'
+                };
             }
         }
 
-        return matches / patternWords.length;
+        const fallbackResult = this.fallbackIdentify(normalized);
+
+        if (context && (!fallbackResult.intent || fallbackResult.confidence < 0.6)) {
+            const contextualIntent = this.resolveContextualIntent(normalized, context, userId);
+            if (contextualIntent) {
+                return {
+                    intent: contextualIntent.intent,
+                    confidence: contextualIntent.confidence,
+                    normalized,
+                    method: 'context'
+                };
+            }
+        }
+
+        if (this.isLeadInfoResponse(text, userId)) {
+            return {
+                intent: 'lead_info',
+                confidence: 0.9,
+                normalized,
+                method: 'lead_capture'
+            };
+        }
+
+        return {
+            ...fallbackResult,
+            normalized,
+            method: 'fallback'
+        };
     }
 
-    // Identificar intent da mensagem
-    identifyIntent(text, userId) {
-        const normalized = this.normalize(text);
+    fallbackIdentify(normalized) {
         let bestMatch = null;
         let bestScore = 0;
 
-        // Buscar em todos os intents
         for (const [intentName, intentData] of Object.entries(intents)) {
+            if (!intentData.patterns || intentData.patterns.length === 0) continue;
+
             for (const pattern of intentData.patterns) {
                 const normalizedPattern = this.normalize(pattern);
 
-                // Verificar match exato
                 if (normalized.includes(normalizedPattern)) {
-                    const score = 1.0;
+                    const lengthBonus = normalizedPattern.split(' ').length * 0.1;
+                    const score = 0.8 + lengthBonus + (intentData.priority || 1) * 0.02;
+
                     if (score > bestScore) {
                         bestScore = score;
                         bestMatch = intentName;
                     }
                 }
-
-                // Calcular similaridade
-                const similarity = this.calculateSimilarity(normalized, normalizedPattern);
-                if (similarity > bestScore && similarity > 0.5) {
-                    bestScore = similarity;
-                    bestMatch = intentName;
-                }
-            }
-        }
-
-        // Se não encontrou match, verificar contexto anterior
-        if (!bestMatch || bestScore < 0.6) {
-            const context = this.conversationContext.get(userId);
-            if (context && this.isContextualResponse(normalized, context)) {
-                bestMatch = this.getContextualIntent(normalized, context);
-                bestScore = 0.7;
             }
         }
 
         return {
             intent: bestMatch || 'unknown',
-            confidence: bestScore,
-            normalized
+            confidence: Math.min(bestScore, 1.0)
         };
     }
 
-    // Verificar se é resposta contextual
-    isContextualResponse(text, context) {
-        const affirmative = ['sim', 's', 'quero', 'vamos', 'ok', 'aceito', 'claro'];
-        const negative = ['nao', 'não', 'n', 'depois', 'agora nao'];
+    resolveContextualIntent(text, context, userId) {
+        const affirmativeWords = ['sim', 's', 'quero', 'ok', 'claro', 'aceito', 'isso', 'beleza', 'pode', 'bora'];
+        const negativeWords = ['nao', 'não', 'n', 'depois', 'agora nao', 'agora não'];
 
-        return affirmative.some(w => text.includes(w)) ||
-               negative.some(w => text.includes(w));
-    }
+        const isAffirmative = affirmativeWords.some(w => text.includes(w));
+        const isNegative = negativeWords.some(w => text.includes(w));
 
-    // Obter intent baseado no contexto
-    getContextualIntent(text, context) {
-        const affirmative = ['sim', 's', 'quero', 'vamos', 'ok', 'aceito'];
-
-        if (affirmative.some(w => text.includes(w))) {
-            if (context === 'services') return 'interested';
-            if (context === 'pricing') return 'interested';
+        if (isAffirmative && !isNegative) {
+            if (['services', 'pricing', 'portfolio'].includes(context)) {
+                return { intent: 'interested', confidence: 0.85 };
+            }
+            return { intent: 'affirmative', confidence: 0.8 };
         }
 
-        return 'menu';
+        if (isNegative) {
+            return { intent: 'negative', confidence: 0.85 };
+        }
+
+        return null;
     }
 
-    // Extrair entidades (nome, email, telefone, etc)
+    isLeadInfoResponse(text, userId) {
+        const context = this.conversationContext.get(userId);
+        if (context !== 'lead_capture') return false;
+
+        const lines = text.split('\n').filter(l => l.trim());
+        const entities = this.extractEntities(text);
+
+        return lines.length >= 2 || Object.keys(entities).length >= 1;
+    }
+
     extractEntities(text) {
         const entities = {};
 
-        // Email
-        const emailRegex = /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b/;
+        const emailRegex = /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b/i;
         const emailMatch = text.match(emailRegex);
         if (emailMatch) {
-            entities.email = emailMatch[0];
+            entities.email = emailMatch[0].toLowerCase();
         }
 
-        // Telefone
         const phoneRegex = /(?:\+?55\s?)?(?:\(?0?\d{2}\)?\s?)?\d{4,5}[-\s]?\d{4}/;
         const phoneMatch = text.match(phoneRegex);
         if (phoneMatch) {
             entities.phone = phoneMatch[0].replace(/\D/g, '');
         }
 
-        // Nome (heurística simples: 2+ palavras capitalizadas)
-        const nameRegex = /\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)\b/;
-        const nameMatch = text.match(nameRegex);
-        if (nameMatch) {
-            entities.name = nameMatch[0];
+        const lines = text.split('\n').map(l => l.trim()).filter(l => l);
+
+        if (lines.length >= 1) {
+            const firstLine = lines[0];
+            if (!emailMatch || !firstLine.includes('@')) {
+                if (!phoneMatch || !firstLine.match(/\d{4,}/)) {
+                    if (firstLine.length > 1 && firstLine.length < 50) {
+                        const cleanName = firstLine.replace(/[^\w\s]/g, '').trim();
+                        if (cleanName && !cleanName.match(/^\d+$/)) {
+                            entities.name = this.capitalizeWords(cleanName);
+                        }
+                    }
+                }
+            }
+        }
+
+        if (lines.length >= 2) {
+            const secondLine = lines[1];
+            if (!secondLine.includes('@') && !secondLine.match(/\d{4,}/)) {
+                if (secondLine.length > 1 && secondLine.length < 50) {
+                    entities.company = secondLine;
+                }
+            }
+        }
+
+        if (lines.length >= 3) {
+            const thirdLine = lines[2].toLowerCase();
+            const services = ['site', 'landing', 'trafego', 'tráfego', 'marketing', 'ecommerce', 'loja'];
+            for (const service of services) {
+                if (thirdLine.includes(service)) {
+                    entities.service = thirdLine;
+                    break;
+                }
+            }
+            if (!entities.service && thirdLine.length > 2) {
+                entities.service = thirdLine;
+            }
         }
 
         return entities;
     }
 
-    // Detectar urgência
+    capitalizeWords(str) {
+        return str.split(' ')
+            .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+            .join(' ');
+    }
+
     detectUrgency(text) {
         const normalized = this.normalize(text);
-        return contextKeywords.urgency.some(keyword =>
-            normalized.includes(keyword)
-        );
+        return contextKeywords.urgency.some(keyword => normalized.includes(keyword));
     }
 
-    // Detectar menção a orçamento
     detectBudgetConcern(text) {
         const normalized = this.normalize(text);
-        return contextKeywords.budget.some(keyword =>
-            normalized.includes(keyword)
-        );
+        return contextKeywords.budget.some(keyword => normalized.includes(keyword));
     }
 
-    // Processar mensagem completa
     async analyze(text, userId) {
-        // Identificar intent
-        const { intent, confidence, normalized } = this.identifyIntent(text, userId);
+        if (!this.embeddingsReady && this.useEmbeddings) {
+            await this.initializeEmbeddings();
+        }
 
-        // Extrair entidades
+        const { intent, confidence, normalized, method } = await this.identifyIntent(text, userId);
         const entities = this.extractEntities(text);
-
-        // Detectar contexto
         const isUrgent = this.detectUrgency(text);
         const budgetConcern = this.detectBudgetConcern(text);
 
-        // Obter resposta
-        const response = this.getResponse(intent, userId);
+        if (Object.keys(entities).length > 0) {
+            const existing = this.pendingLeadData.get(userId) || {};
+            this.pendingLeadData.set(userId, { ...existing, ...entities });
+        }
 
-        // Atualizar contexto
+        const response = this.getResponse(intent, userId, entities);
+
         if (intents[intent]?.context) {
             this.conversationContext.set(userId, intents[intent].context);
         }
 
-        // Atualizar sessão
         this.updateSession(userId, {
             lastIntent: intent,
             lastMessage: text,
             timestamp: Date.now()
         });
 
+        const collectedEntities = this.pendingLeadData.get(userId) || {};
+        const finalEntities = { ...collectedEntities, ...entities };
+
         return {
             intent,
             confidence,
             response,
-            entities,
+            entities: finalEntities,
             context: {
                 isUrgent,
                 budgetConcern
             },
-            shouldCollectData: intents[intent]?.collectData || false
+            method,
+            shouldCollectData: intents[intent]?.collectData || Object.keys(entities).length > 0
         };
     }
 
-    // Obter resposta para intent
-    getResponse(intent, userId) {
+    getResponse(intent, userId, entities) {
         const intentData = intents[intent];
 
         if (!intentData) {
             return this.getDefaultResponse();
         }
 
-        // Se tem múltiplas respostas, escolher aleatória
+        if (intent === 'lead_info' && entities.name) {
+            return `Anotado, ${entities.name}! Vou passar pro time e alguém entra em contato em breve.
+
+Precisa de mais alguma coisa?`;
+        }
+
         if (Array.isArray(intentData.responses)) {
             const randomIndex = Math.floor(Math.random() * intentData.responses.length);
             return intentData.responses[randomIndex];
@@ -200,16 +281,12 @@ class NLPAnalyzer {
         return intentData.responses;
     }
 
-    // Resposta padrão
     getDefaultResponse() {
-        return `Desculpe, não entendi muito bem. 😅
+        return `Não consegui entender direito. 😅
 
-Digite *menu* para ver todas as opções de serviços!
-
-Ou me conte: o que você está procurando?`;
+Me conta de outra forma o que você tá buscando, ou digita *menu* pra ver as opções.`;
     }
 
-    // Atualizar sessão do usuário
     updateSession(userId, data) {
         const session = this.userSessions.get(userId) || {
             messages: [],
@@ -222,29 +299,26 @@ Ou me conte: o que você está procurando?`;
         this.userSessions.set(userId, session);
     }
 
-    // Obter sessão do usuário
     getSession(userId) {
         return this.userSessions.get(userId);
     }
 
-    // Limpar sessões antigas (mais de 30 minutos inativas)
     cleanOldSessions() {
         const now = Date.now();
-        const timeout = 30 * 60 * 1000; // 30 minutos
+        const timeout = 30 * 60 * 1000;
 
         for (const [userId, session] of this.userSessions.entries()) {
             if (now - session.lastActivity > timeout) {
                 this.userSessions.delete(userId);
                 this.conversationContext.delete(userId);
+                this.pendingLeadData.delete(userId);
             }
         }
     }
 }
 
-// Singleton
 const nlpAnalyzer = new NLPAnalyzer();
 
-// Limpar sessões antigas a cada 5 minutos
 setInterval(() => {
     nlpAnalyzer.cleanOldSessions();
 }, 5 * 60 * 1000);

@@ -1,8 +1,9 @@
-// API REST para gerenciamento do bot
+// src/api/server.js
 const http = require('http');
 const url = require('url');
 const fs = require('fs').promises;
 const path = require('path');
+const nlpAnalyzer = require('../nlp/analyzer.js');
 
 class BotAPI {
     constructor(database, whatsappBot) {
@@ -11,10 +12,8 @@ class BotAPI {
         this.port = process.env.PORT || 3000;
     }
 
-    // Iniciar servidor
     start() {
         const server = http.createServer(async (req, res) => {
-            // CORS Headers
             res.setHeader('Access-Control-Allow-Origin', '*');
             res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
             res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
@@ -29,7 +28,6 @@ class BotAPI {
             const pathname = parsedUrl.pathname;
 
             try {
-                // Servir arquivos estáticos
                 if (pathname === '/' || pathname.startsWith('/index.html')) {
                     await this.serveFile(res, 'public/index.html', 'text/html');
                     return;
@@ -45,7 +43,6 @@ class BotAPI {
                     return;
                 }
 
-                // API Routes
                 if (pathname.startsWith('/api/')) {
                     await this.handleAPI(req, res, pathname, parsedUrl.query);
                 } else {
@@ -64,7 +61,6 @@ class BotAPI {
         });
     }
 
-    // Servir arquivo estático
     async serveFile(res, filePath, contentType) {
         try {
             const fullPath = path.join(process.cwd(), filePath);
@@ -77,17 +73,14 @@ class BotAPI {
         }
     }
 
-    // Processar requisição da API
     async handleAPI(req, res, pathname, query) {
         const method = req.method;
         const parts = pathname.split('/').filter(p => p);
 
-        // Remover 'api' do início
         parts.shift();
 
         const endpoint = parts[0];
 
-        // Rotas
         if (endpoint === 'status' && method === 'GET') {
             return this.getStatus(res);
         }
@@ -130,10 +123,10 @@ class BotAPI {
         res.end(JSON.stringify({ error: 'Endpoint not found' }));
     }
 
-    // Obter status da conexão
     async getStatus(res) {
-        const isConnected = this.bot && this.bot.sock && this.bot.sock.user;
-        const user = isConnected ? this.bot.sock.user : null;
+        const sock = this.bot?.getSocket?.();
+        const isConnected = sock && sock.user;
+        const user = isConnected ? sock.user : null;
 
         this.sendJSON(res, 200, {
             connected: !!isConnected,
@@ -145,14 +138,18 @@ class BotAPI {
         });
     }
 
-    // Obter configurações
     async getConfig(res) {
+        if (!this.db) {
+            return this.sendJSON(res, 200, {});
+        }
         const config = await this.db.getAllConfig();
         this.sendJSON(res, 200, config);
     }
 
-    // Atualizar configurações
     async updateConfig(req, res) {
+        if (!this.db) {
+            return this.sendJSON(res, 503, { error: 'Database not available' });
+        }
         const body = await this.getBody(req);
         const data = JSON.parse(body);
 
@@ -163,8 +160,10 @@ class BotAPI {
         this.sendJSON(res, 200, { success: true });
     }
 
-    // Obter leads
     async getLeads(res, query) {
+        if (!this.db) {
+            return this.sendJSON(res, 200, []);
+        }
         const limit = parseInt(query.limit) || 50;
         const offset = parseInt(query.offset) || 0;
 
@@ -172,8 +171,10 @@ class BotAPI {
         this.sendJSON(res, 200, leads);
     }
 
-    // Obter conversas
     async getConversations(res, query) {
+        if (!this.db) {
+            return this.sendJSON(res, 200, []);
+        }
         const limit = parseInt(query.limit) || 50;
         const offset = parseInt(query.offset) || 0;
 
@@ -181,31 +182,35 @@ class BotAPI {
         this.sendJSON(res, 200, conversations);
     }
 
-    // Obter mensagens
     async getMessages(res, conversationId) {
+        if (!this.db) {
+            return this.sendJSON(res, 200, []);
+        }
         const messages = await this.db.getMessages(parseInt(conversationId));
         this.sendJSON(res, 200, messages);
     }
 
-    // Enviar mensagem (teste)
     async sendMessage(req, res) {
         const body = await this.getBody(req);
         const { chatId, message } = JSON.parse(body);
 
-        if (!this.bot || !this.bot.sock) {
+        const sock = this.bot?.getSocket?.();
+        if (!sock) {
             return this.sendJSON(res, 503, { error: 'Bot not connected' });
         }
 
         try {
-            await this.bot.sock.sendMessage(chatId, { text: message });
+            await sock.sendMessage(chatId, { text: message });
             this.sendJSON(res, 200, { success: true });
         } catch (error) {
             this.sendJSON(res, 500, { error: error.message });
         }
     }
 
-    // Atualizar conversa (ativar/desativar bot)
     async updateConversation(req, res, chatId) {
+        if (!this.db) {
+            return this.sendJSON(res, 503, { error: 'Database not available' });
+        }
         const body = await this.getBody(req);
         const { is_bot_active } = JSON.parse(body);
 
@@ -213,26 +218,32 @@ class BotAPI {
         this.sendJSON(res, 200, { success: true });
     }
 
-    // Obter estatísticas
     async getStats(res) {
+        if (!this.db) {
+            return this.sendJSON(res, 200, {
+                total_messages: 0,
+                total_conversations: 0,
+                new_leads: 0,
+                bot_responses: 0
+            });
+        }
         const stats = await this.db.getTodayStats();
         this.sendJSON(res, 200, stats);
     }
 
-    // Testar NLP
     async testNLP(req, res) {
-        const body = await this.getBody(req);
-        const { message } = JSON.parse(body);
+        try {
+            const body = await this.getBody(req);
+            const { message } = JSON.parse(body);
 
-        if (!this.bot || !this.bot.nlp) {
-            return this.sendJSON(res, 503, { error: 'NLP not available' });
+            const result = await nlpAnalyzer.analyze(message, 'test_user');
+            this.sendJSON(res, 200, result);
+        } catch (error) {
+            console.error('Erro no teste NLP:', error);
+            this.sendJSON(res, 500, { error: error.message });
         }
-
-        const result = await this.bot.nlp.analyze(message, 'test_user');
-        this.sendJSON(res, 200, result);
     }
 
-    // Helpers
     async getBody(req) {
         return new Promise((resolve, reject) => {
             let body = '';

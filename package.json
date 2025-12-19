@@ -8,15 +8,17 @@
     "start": "node bot.js",
     "dev": "node bot.js",
     "old": "node bot.js",
-    "init-db": "node scripts/init-db.js"
+    "init-db": "node scripts/init-db.js",
+    "init-embeddings": "node scripts/init-embeddings.js"
   },
   "dependencies": {
     "@whiskeysockets/baileys": "^6.7.8",
+    "@xenova/transformers": "^2.17.2",
     "dotenv": "^16.6.1",
     "pino": "^8.17.2",
     "qrcode-terminal": "^0.12.0"
   },
   "engines": {
-    "node": ">=16.0.0"
+    "node": ">=18.0.0"
   }
 }

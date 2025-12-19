@@ -1,9 +1,15 @@
-// WhatsApp Bot Completo - Com NLP, Dashboard e Banco de Dados
 require('dotenv').config();
 
-const { default: makeWASocket, DisconnectReason, useMultiFileAuthState, makeCacheableSignalKeyStore } = require('@whiskeysockets/baileys');
+const { default: makeWASocket, DisconnectReason, useMultiFileAuthState, makeCacheableSignalKeyStore, fetchLatestBaileysVersion } = require('@whiskeysockets/baileys');
 const readline = require('readline');
 const P = require('pino');
+
+const nlpAnalyzer = require('./src/nlp/analyzer.js');
+const CloudflareD1 = require('./src/database/d1.js');
+const BotAPI = require('./src/api/server.js');
+const config = require('./src/config/index.js');
+
+const logger = P({ level: 'silent' });
 
 const rl = readline.createInterface({
     input: process.stdin,
@@ -12,15 +18,6 @@ const rl = readline.createInterface({
 
 const question = (text) => new Promise((resolve) => rl.question(text, resolve));
 
-// Importar módulos do bot
-const nlpAnalyzer = require('./src/nlp/analyzer.js');
-const CloudflareD1 = require('./src/database/d1.js');
-const BotAPI = require('./src/api/server.js');
-const config = require('./src/config/index.js');
-
-const logger = P({ level: 'silent' });
-
-// Variáveis globais
 let sock = null;
 let db = null;
 let api = null;
@@ -38,31 +35,34 @@ let backendInitialized = false;
 
 async function connectToWhatsApp() {
     const { state, saveCreds } = await useMultiFileAuthState('auth_info');
+    const { version } = await fetchLatestBaileysVersion();
 
     sock = makeWASocket({
+        version,
         auth: {
             creds: state.creds,
             keys: makeCacheableSignalKeyStore(state.keys, logger)
         },
         logger,
+        printQRInTerminal: false,
         syncFullHistory: false,
-        markOnlineOnConnect: false
+        markOnlineOnConnect: false,
+        browser: ['Ubuntu', 'Chrome', '20.0.04'],
+        connectTimeoutMs: 60000,
+        defaultQueryTimeoutMs: 60000,
+        keepAliveIntervalMs: 30000,
+        emitOwnEvents: false,
+        getMessage: async () => undefined
     });
-
-    // Pairing code se não estiver registrado
-    if (!sock.authState.creds.registered) {
-        const phoneNumber = await question('Digite seu número do WhatsApp (com DDI, ex: 5589994333316): ');
-        const code = await sock.requestPairingCode(phoneNumber);
-        console.log(`\n🔑 Código de pareamento: ${code}\n`);
-        console.log('Digite este código no seu WhatsApp: Dispositivos Conectados > Conectar Dispositivo > Código\n');
-    }
 
     sock.ev.on('creds.update', saveCreds);
 
-    sock.ev.on('connection.update', (update) => {
+    sock.ev.on('connection.update', async (update) => {
         const { connection, lastDisconnect } = update;
 
-        console.log('📊 Connection update:', connection);
+        if (connection === 'connecting') {
+            console.log('🔄 Conectando ao WhatsApp...');
+        }
 
         if (connection === 'close') {
             const statusCode = lastDisconnect?.error?.output?.statusCode;
@@ -72,27 +72,47 @@ async function connectToWhatsApp() {
 
             console.log('❌ Conexão fechada');
             console.log('   Motivo:', reason);
-            console.log('   Status Code:', statusCode);
-            console.log('   Erro:', lastDisconnect?.error?.message);
 
             const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
-            console.log('   Reconectar?', shouldReconnect);
 
             if (shouldReconnect) {
+                console.log('🔄 Reconectando em 3 segundos...');
                 setTimeout(() => connectToWhatsApp(), 3000);
+            } else {
+                console.log('\n⚠️  Sessão encerrada. Delete a pasta auth_info e execute novamente.');
+                process.exit(0);
             }
         } else if (connection === 'open') {
-            console.log('\n━'.repeat(50));
+            console.log('\n' + '━'.repeat(50));
             console.log('✅ CONECTADO AO WHATSAPP!');
             console.log('━'.repeat(50));
+            rl.close();
 
-            // Inicializar backend APENAS uma vez
             if (!backendInitialized) {
                 backendInitialized = true;
-                initializeBackend();
+                await initializeBackend();
             }
         }
     });
+
+    if (!sock.authState.creds.registered) {
+        console.log('\n📱 Aguardando conexão inicial...\n');
+
+        await new Promise(resolve => setTimeout(resolve, 3000));
+
+        const phoneNumber = await question('Digite seu número do WhatsApp (com DDI, ex: 5589994333316): ');
+
+        try {
+            const code = await sock.requestPairingCode(phoneNumber.replace(/\D/g, ''));
+            console.log(`\n🔑 Código de pareamento: ${code}\n`);
+            console.log('Digite este código no seu WhatsApp:');
+            console.log('   Configurações > Aparelhos conectados > Conectar aparelho\n');
+        } catch (error) {
+            console.error('❌ Erro ao solicitar código:', error.message);
+            console.log('🔄 Tentando novamente em 5 segundos...\n');
+            setTimeout(() => connectToWhatsApp(), 5000);
+        }
+    }
 
     sock.ev.on('messages.upsert', async ({ messages, type }) => {
         try {
@@ -111,7 +131,14 @@ async function connectToWhatsApp() {
 
 async function initializeBackend() {
     try {
-        console.log('\n📦 Conectando ao banco de dados...');
+        console.log('\n🧠 Inicializando NLP com embeddings...');
+        await nlpAnalyzer.initializeEmbeddings();
+    } catch (error) {
+        console.log('⚠️  Embeddings não disponível:', error.message);
+    }
+
+    try {
+        console.log('📦 Conectando ao banco de dados...');
         db = new CloudflareD1({
             accountId: config.cloudflare.accountId,
             databaseId: config.cloudflare.databaseId,
@@ -120,10 +147,8 @@ async function initializeBackend() {
 
         botConfig = await db.getAllConfig();
         console.log('✅ Banco de dados conectado');
-        console.log(`✅ ${Object.keys(botConfig).length} configurações carregadas`);
     } catch (error) {
         console.error('⚠️  Erro ao conectar banco:', error.message);
-        console.log('⚠️  Continuando sem banco de dados...');
     }
 
     try {
@@ -132,7 +157,6 @@ async function initializeBackend() {
         api.start();
     } catch (error) {
         console.error('⚠️  Erro ao iniciar API:', error.message);
-        console.log('⚠️  Continuando sem dashboard...');
     }
 
     console.log('\n🤖 Bot pronto! Aguardando mensagens...\n');
@@ -204,12 +228,12 @@ async function handleMessage(msg) {
         if (botConfig.business_hours_only && !isBusinessHours()) {
             const response = botConfig.away_message;
             await sock.sendMessage(remoteJid, { text: response });
-            console.log(`   🕐 Fora do horário: ${response}`);
+            console.log(`   🕐 Fora do horário`);
             return;
         }
 
         const nlpResult = await nlpAnalyzer.analyze(messageText, remoteJid);
-        console.log(`   🧠 Intent: ${nlpResult.intent} (${(nlpResult.confidence * 100).toFixed(1)}%)`);
+        console.log(`   🧠 Intent: ${nlpResult.intent} (${(nlpResult.confidence * 100).toFixed(1)}%) [${nlpResult.method}]`);
 
         if (db && conversation) {
             try {
@@ -256,10 +280,10 @@ async function handleMessage(msg) {
                     phone,
                     name: nlpResult.entities.name || null,
                     email: nlpResult.entities.email || null,
-                    company: null,
+                    company: nlpResult.entities.company || null,
                     tags: []
                 });
-                console.log('   💾 Lead atualizado');
+                console.log('   💾 Lead atualizado com:', Object.keys(nlpResult.entities).join(', '));
             } catch (error) {
                 console.log('   ⚠️  Erro ao atualizar lead:', error.message);
             }
@@ -285,5 +309,4 @@ function isBusinessHours() {
     return currentTime >= startTime && currentTime <= endTime;
 }
 
-// Iniciar bot
 connectToWhatsApp();
