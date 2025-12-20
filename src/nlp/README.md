@@ -1,12 +1,3 @@
-```md
-# 🧠 Como funciona o NLP do Bot (explicação simples)
-
-Este documento explica, de forma **bem resumida e para leigos**, como funciona a pasta **`src/nlp`** do projeto.
-
-A ideia é entender **como o bot pensa e responde como um humano**, sem entrar em termos técnicos complicados.
-
----
-
 ## 📂 O que é a pasta `src/nlp`?
 
 Essa pasta é o **cérebro do bot**.
@@ -176,4 +167,4 @@ Porque o bot:
 > Este NLP funciona como um atendente que entende o que o cliente quer, lembra da conversa e responde no momento certo, sem confundir assuntos ou repetir mensagens.
 
 ---
-```
+
