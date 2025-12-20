@@ -9,7 +9,7 @@ class BotAPI {
     constructor(database, whatsappBot) {
         this.db = database;
         this.bot = whatsappBot;
-        this.port = process.env.PORT || 3000;
+        this.port = process.env.PORT || 3512;
     }
 
     start() {
@@ -56,7 +56,7 @@ class BotAPI {
             }
         });
 
-        server.listen(this.port, () => {
+        server.listen(this.port, "0.0.0.0", () => {
             console.log(`\n🌐 Dashboard disponível em: http://localhost:${this.port}`);
         });
     }

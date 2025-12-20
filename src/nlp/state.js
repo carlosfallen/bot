@@ -1,37 +1,49 @@
 // FILE: src/nlp/state.js
 /**
  * GERENCIADOR DE ESTADO AVANÇADO
- * Controla toda a jornada do cliente de forma inteligente
+ * Memória completa da conversa
  */
 
 class ConversationStateManager {
     constructor() {
         this.states = new Map();
-        this.timeout = 60 * 60 * 1000; // 1 hora
+        this.timeouts = {
+            active: 10 * 60 * 1000,      // 10 minutos
+            pause: 3 * 60 * 60 * 1000,   // 3 horas
+            reentry: 7 * 24 * 60 * 60 * 1000  // 7 dias
+        };
     }
 
     get(userId) {
         let state = this.states.get(userId);
         
-        if (!state || this.isExpired(state)) {
+        if (!state) {
             state = this.createNew();
             this.states.set(userId, state);
         }
 
+        // Calcular modo baseado no tempo
+        state.mode = this.calculateMode(state);
+        
         return state;
-    }
-
-    isExpired(state) {
-        return Date.now() - state.lastActivity > this.timeout;
     }
 
     createNew() {
         return {
-            // ===== ESTÁGIO DA CONVERSA =====
-            stage: 'inicio',
-            // inicio → conhecendo → explorando → detalhando → negociando → fechando
-
-            // ===== CONTEXTO DO CLIENTE =====
+            // Estágio da conversa
+            stage: 'inicio', // inicio, conhecendo, explorando, detalhando, negociando, fechando, pos_venda
+            
+            // Assunto atual
+            assunto: null, // site, landing, ecommerce, trafego, marketing
+            plano: null,   // simples, completo, loja, starter, pro, scale, basico, premium
+            
+            // Modo temporal
+            mode: 'active', // active, pause, reentry, cold
+            
+            // Temperatura de compra
+            heat: 'cold', // cold, warm, hot
+            
+            // Cliente
             cliente: {
                 nome: null,
                 empresa: null,
@@ -39,41 +51,81 @@ class ConversationStateManager {
                 email: null,
                 segmento: null
             },
-
-            // ===== INTERESSE =====
-            interesse: {
-                servico: null,        // site, landing, trafego, marketing
-                tipo: null,           // simples, completo, loja, etc.
-                urgencia: false,
-                orcamento: null,      // baixo, medio, alto
-                objetivo: null        // vendas, presenca, leads, etc.
+            
+            // Flags de ações já feitas
+            ja: {
+                apresentou: false,
+                explicou: { site: false, landing: false, ecommerce: false, trafego: false, marketing: false },
+                mostrouPreco: false,
+                mostrouOpcoes: false,
+                pediuDados: false,
+                enviouProposta: false,
+                ofereceuDesconto: false,
+                enviouPagamento: false
             },
-
-            // ===== HISTÓRICO =====
-            historico: {
-                mensagens: 0,
-                ultimoIntent: null,
-                ultimoAssunto: null,
-                servicosMencionados: [],
-                perguntasFeitas: [],
-                informacoesColetadas: []
+            
+            // Última ação do bot
+            lastBot: {
+                action: null,     // greet, explain, price, options, ask_data, proposal, payment, etc
+                question: null,   // binary, open, data, confirm
+                timestamp: 0
             },
-
-            // ===== FLAGS =====
-            flags: {
-                jaApresentou: false,
-                jaMostrouServicos: false,
-                jaMostrouPreco: false,
-                jaPediuContato: false,
-                jaExplicouServico: false,
-                aguardandoResposta: null,  // tipo de resposta esperada
-                tentativasColeta: 0
+            
+            // O que o usuário precisa/quer
+            userNeeds: {
+                info: false,
+                price: false,
+                examples: false,
+                proposal: false,
+                schedule: false
             },
-
-            // ===== TIMESTAMPS =====
+            
+            // Objeções identificadas
+            objections: {
+                price: 0,    // contador de vezes
+                time: 0,
+                trust: 0,
+                compare: 0,
+                confusion: 0
+            },
+            
+            // Negociação
+            negotiation: {
+                descontoOferecido: 0,
+                descontoMaximo: 15,
+                valorOriginal: 0,
+                valorAtual: 0,
+                formaPagamento: null,
+                parcelas: null
+            },
+            
+            // Pendências
+            pending: {
+                kind: null,  // choose_service, choose_plan, send_data, confirm_payment, etc
+                data: null,
+                createdAt: 0
+            },
+            
+            // Resumo do que foi discutido
+            topicSummary: '',
+            
+            // Histórico recente
+            historico: [], // últimas 10 interações
+            
+            // Timestamps
             createdAt: Date.now(),
-            lastActivity: Date.now()
+            lastActivity: Date.now(),
+            messageCount: 0
         };
+    }
+
+    calculateMode(state) {
+        const timeSince = Date.now() - state.lastActivity;
+        
+        if (timeSince < this.timeouts.active) return 'active';
+        if (timeSince < this.timeouts.pause) return 'pause';
+        if (timeSince < this.timeouts.reentry) return 'reentry';
+        return 'cold';
     }
 
     update(userId, updates) {
@@ -81,7 +133,9 @@ class ConversationStateManager {
         
         // Merge profundo
         this.deepMerge(state, updates);
+        
         state.lastActivity = Date.now();
+        state.messageCount++;
         
         this.states.set(userId, state);
         return state;
@@ -98,72 +152,59 @@ class ConversationStateManager {
         }
     }
 
-    addToHistory(userId, intent, servico = null) {
+    addToHistory(userId, entry) {
         const state = this.get(userId);
         
-        state.historico.mensagens++;
-        state.historico.ultimoIntent = intent;
+        state.historico.push({
+            ...entry,
+            timestamp: Date.now()
+        });
         
-        if (servico && !state.historico.servicosMencionados.includes(servico)) {
-            state.historico.servicosMencionados.push(servico);
+        // Manter apenas últimas 10
+        if (state.historico.length > 10) {
+            state.historico = state.historico.slice(-10);
         }
-
-        state.lastActivity = Date.now();
+        
         this.states.set(userId, state);
     }
 
-    registrarPergunta(userId, pergunta) {
+    updateHeat(userId, signals) {
         const state = this.get(userId);
-        state.historico.perguntasFeitas.push(pergunta);
-        state.flags.aguardandoResposta = pergunta;
+        
+        if (signals.wants_proposal || signals.ready_to_buy || signals.payment_pix || signals.payment_card) {
+            state.heat = 'hot';
+        } else if (signals.price_ask || signals.wants_examples || signals.schedule_request) {
+            if (state.heat === 'cold') state.heat = 'warm';
+        } else if (signals.objection_time || signals.short_negative) {
+            state.heat = 'cold';
+        }
+        
+        this.states.set(userId, state);
+        return state.heat;
+    }
+
+    incrementObjection(userId, type) {
+        const state = this.get(userId);
+        if (state.objections[type] !== undefined) {
+            state.objections[type]++;
+        }
         this.states.set(userId, state);
     }
 
-    registrarInfoColetada(userId, tipo) {
-        const state = this.get(userId);
-        if (!state.historico.informacoesColetadas.includes(tipo)) {
-            state.historico.informacoesColetadas.push(tipo);
-        }
-        this.states.set(userId, state);
-    }
-
-    // Determinar próximo passo lógico
-    proximoPasso(userId) {
-        const state = this.get(userId);
-        const { stage, interesse, cliente, flags, historico } = state;
-
-        // Se não sabe o serviço, perguntar
-        if (!interesse.servico && historico.mensagens > 1) {
-            return 'perguntar_servico';
-        }
-
-        // Se sabe o serviço mas não detalhou
-        if (interesse.servico && !flags.jaExplicouServico) {
-            return 'explicar_servico';
-        }
-
-        // Se explicou mas não mostrou preço
-        if (flags.jaExplicouServico && !flags.jaMostrouPreco) {
-            return 'mostrar_preco';
-        }
-
-        // Se mostrou preço mas não tem contato
-        if (flags.jaMostrouPreco && !cliente.nome) {
-            return 'coletar_contato';
-        }
-
-        // Se tem tudo, fechar
-        if (cliente.nome && flags.jaMostrouPreco) {
-            return 'fechar';
-        }
-
-        return 'continuar';
+    setAssunto(userId, assunto, plano = null) {
+        this.update(userId, { 
+            assunto, 
+            plano,
+            stage: 'explorando'
+        });
     }
 
     cleanup() {
         const now = Date.now();
+        const maxAge = 30 * 24 * 60 * 60 * 1000; // 30 dias
+        
         for (const [userId, state] of this.states.entries()) {
-            if (now - state.lastActivity > this.timeout) {
+            if (now - state.lastActivity > maxAge) {
                 this.states.delete(userId);
             }
         }
@@ -172,6 +213,7 @@ class ConversationStateManager {
 
 const stateManager = new ConversationStateManager();
 
-setInterval(() => stateManager.cleanup(), 10 * 60 * 1000);
+// Limpar a cada hora
+setInterval(() => stateManager.cleanup(), 60 * 60 * 1000);
 
 module.exports = stateManager;
