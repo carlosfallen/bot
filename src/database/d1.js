@@ -1,354 +1,430 @@
-// Cliente Cloudflare D1 Database
-
-const https = require('https');
+// FILE: src/database/d1.js
+/**
+ * CLOUDFLARE D1 DATABASE CLIENT - CORRIGIDO PARA SCHEMA REAL
+ */
 
 class CloudflareD1 {
-    constructor({ accountId, databaseId, apiToken }) {
-        this.accountId = String(accountId || '').trim();
-        this.databaseId = String(databaseId || '').trim();
-        this.apiToken = String(apiToken || '').trim();
-
+    constructor(config) {
+        this.accountId = config.accountId;
+        this.databaseId = config.databaseId;
+        this.apiToken = config.apiToken;
+        this.baseUrl = `https://api.cloudflare.com/client/v4/accounts/${this.accountId}/d1/database/${this.databaseId}`;
+        
         if (!this.accountId || !this.databaseId || !this.apiToken) {
-            throw new Error('Cloudflare D1: credenciais inválidas ou vazias');
+            console.log('⚠️ Cloudflare D1 não configurado completamente');
         }
-
-        this.baseUrl = `https://api.cloudflare.com/client/v4/accounts/${accountId}/d1/database/${databaseId}`;
     }
 
-    // Executar query
     async query(sql, params = []) {
-        return new Promise((resolve, reject) => {
-            const data = JSON.stringify({
-                sql,
-                params
-            });
-
-            const options = {
-                hostname: 'api.cloudflare.com',
-                path: `/client/v4/accounts/${this.accountId}/d1/database/${this.databaseId}/query`,
+        try {
+            const response = await fetch(`${this.baseUrl}/query`, {
                 method: 'POST',
                 headers: {
                     'Authorization': `Bearer ${this.apiToken}`,
-                    'Content-Type': 'application/json',
-                    'Content-Length': Buffer.byteLength(data)
-                }
-            };
-
-            const req = https.request(options, (res) => {
-                let body = '';
-
-                res.on('data', (chunk) => {
-                    body += chunk;
-                });
-
-                res.on('end', () => {
-                    try {
-                        const response = JSON.parse(body);
-
-                        if (response.success) {
-                            resolve(response.result?.[0] || {});
-                        } else {
-                            const errorMsg = response.errors?.[0]?.message || JSON.stringify(response.errors);
-                            reject(new Error(errorMsg));
-                        }
-                    } catch (error) {
-                        reject(new Error(`Parse error: ${error.message} | Body: ${body.substring(0, 200)}`));
-                    }
-                });
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ sql, params })
             });
 
-            req.on('error', (error) => {
-                reject(error);
-            });
+            const data = await response.json();
+            
+            if (!data.success) {
+                const error = data.errors?.[0]?.message || 'Erro desconhecido';
+                throw new Error(error);
+            }
 
-            req.write(data);
-            req.end();
-        });
+            return data.result?.[0]?.results || [];
+        } catch (e) {
+            console.error('❌ D1 Query Error:', e.message);
+            throw e;
+        }
     }
 
-    // Executar múltiplas queries em batch
-    async batch(queries) {
-        return new Promise((resolve, reject) => {
-            const statements = queries.map(q => ({
-                sql: q.sql,
-                params: q.params || []
-            }));
-
-            const data = JSON.stringify({ statements });
-
-            const options = {
-                hostname: 'api.cloudflare.com',
-                path: `/client/v4/accounts/${this.accountId}/d1/database/${this.databaseId}/query`,
+    async run(sql, params = []) {
+        try {
+            const response = await fetch(`${this.baseUrl}/query`, {
                 method: 'POST',
                 headers: {
                     'Authorization': `Bearer ${this.apiToken}`,
-                    'Content-Type': 'application/json',
-                    'Content-Length': Buffer.byteLength(data)
-                }
-            };
-
-            const req = https.request(options, (res) => {
-                let body = '';
-
-                res.on('data', (chunk) => {
-                    body += chunk;
-                });
-
-                res.on('end', () => {
-                    try {
-                        const response = JSON.parse(body);
-
-                        if (response.success) {
-                            resolve(response.result);
-                        } else {
-                            reject(new Error(response.errors?.[0]?.message || 'Batch query failed'));
-                        }
-                    } catch (error) {
-                        reject(error);
-                    }
-                });
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ sql, params })
             });
 
-            req.on('error', (error) => {
-                reject(error);
-            });
+            const data = await response.json();
+            
+            if (!data.success) {
+                const error = data.errors?.[0]?.message || 'Erro desconhecido';
+                throw new Error(error);
+            }
 
-            req.write(data);
-            req.end();
-        });
+            return data.result?.[0]?.meta || {};
+        } catch (e) {
+            console.error('❌ D1 Run Error:', e.message);
+            throw e;
+        }
     }
 
-    // Métodos auxiliares
+    // ==================== LEADS ====================
 
-    // Salvar ou atualizar lead
     async saveLead(data) {
         const { phone, name, email, company, tags } = data;
-
-        const result = await this.query(
-            `INSERT INTO leads (phone, name, email, company, tags, last_interaction)
-             VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-             ON CONFLICT(phone) DO UPDATE SET
-                name = COALESCE(?, name),
-                email = COALESCE(?, email),
-                company = COALESCE(?, company),
-                tags = COALESCE(?, tags),
-                last_interaction = CURRENT_TIMESTAMP,
-                updated_at = CURRENT_TIMESTAMP
-             RETURNING id`,
-            [phone, name, email, company, JSON.stringify(tags || []), name, email, company, JSON.stringify(tags || [])]
+        
+        const existing = await this.query(
+            'SELECT id, name, email, company FROM leads WHERE phone = ?',
+            [phone]
         );
 
-        return result.results[0]?.id;
-    }
-
-    // Obter ou criar conversa
-    async getOrCreateConversation(chatId, leadId, chatType = 'private') {
-        let result = await this.query(
-            'SELECT id, is_bot_active FROM conversations WHERE chat_id = ?',
-            [chatId]
-        );
-
-        if (result.results.length > 0) {
-            return result.results[0];
+        if (existing.length > 0) {
+            const lead = existing[0];
+            const updates = [];
+            const params = [];
+            
+            if (name && !lead.name) {
+                updates.push('name = ?');
+                params.push(name);
+            }
+            if (email && !lead.email) {
+                updates.push('email = ?');
+                params.push(email);
+            }
+            if (company && !lead.company) {
+                updates.push('company = ?');
+                params.push(company);
+            }
+            
+            // Sempre atualiza last_interaction
+            updates.push('last_interaction = CURRENT_TIMESTAMP');
+            updates.push('updated_at = CURRENT_TIMESTAMP');
+            
+            if (updates.length > 0) {
+                params.push(phone);
+                await this.run(
+                    `UPDATE leads SET ${updates.join(', ')} WHERE phone = ?`,
+                    params
+                );
+            }
+            
+            return lead.id;
         }
 
-        // Criar nova conversa
-        result = await this.query(
-            `INSERT INTO conversations (lead_id, chat_id, chat_type)
-             VALUES (?, ?, ?)
-             RETURNING id, is_bot_active`,
-            [leadId, chatId, chatType]
+        await this.run(
+            `INSERT INTO leads (phone, name, email, company, tags) VALUES (?, ?, ?, ?, ?)`,
+            [phone, name || null, email || null, company || null, tags ? JSON.stringify(tags) : null]
         );
 
-        return result.results[0];
+        const newLead = await this.query('SELECT id FROM leads WHERE phone = ?', [phone]);
+        return newLead[0]?.id;
     }
 
-    // Salvar mensagem
-    async saveMessage(conversationId, data) {
-        const { messageId, direction, text, intent, confidence, entities, isBot } = data;
-
-        await this.query(
-            `INSERT INTO messages (conversation_id, message_id, direction, message_text, intent, confidence, entities, is_bot_response)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-            [conversationId, messageId, direction, text, intent, confidence, JSON.stringify(entities || {}), isBot ? 1 : 0]
-        );
-
-        // Atualizar contagem de mensagens
-        await this.query(
-            `UPDATE conversations
-             SET message_count = message_count + 1, last_message_at = CURRENT_TIMESTAMP
-             WHERE id = ?`,
-            [conversationId]
-        );
-    }
-
-    // Verificar se bot está ativo para uma conversa
-    async isBotActiveForChat(chatId) {
-        const result = await this.query(
-            'SELECT is_bot_active FROM conversations WHERE chat_id = ?',
-            [chatId]
-        );
-
-        if (result.results.length === 0) {
-            return true; // Ativo por padrão para novas conversas
-        }
-
-        return result.results[0].is_bot_active === 1;
-    }
-
-    // Ativar/Desativar bot para conversa
-    async setBotActiveForChat(chatId, isActive) {
-        await this.query(
-            'UPDATE conversations SET is_bot_active = ? WHERE chat_id = ?',
-            [isActive ? 1 : 0, chatId]
-        );
-    }
-
-    // Obter configuração
-    async getConfig(key) {
-        const result = await this.query(
-            'SELECT value FROM bot_config WHERE key = ?',
-            [key]
-        );
-
-        if (result.results.length === 0) {
-            return null;
-        }
-
-        const value = result.results[0].value;
-
-        // Converter valores booleanos
-        if (value === 'true') return true;
-        if (value === 'false') return false;
-
-        return value;
-    }
-
-    // Definir configuração
-    async setConfig(key, value) {
-        await this.query(
-            `INSERT INTO bot_config (key, value, updated_at)
-             VALUES (?, ?, CURRENT_TIMESTAMP)
-             ON CONFLICT(key) DO UPDATE SET
-                value = ?,
-                updated_at = CURRENT_TIMESTAMP`,
-            [key, String(value), String(value)]
-        );
-    }
-
-    // Obter todas as configurações
-    async getAllConfig() {
-        const result = await this.query('SELECT key, value FROM bot_config');
-
-        const config = {};
-        for (const row of result.results) {
-            let value = row.value;
-            if (value === 'true') value = true;
-            if (value === 'false') value = false;
-            config[row.key] = value;
-        }
-
-        return config;
-    }
-
-    // Listar leads
     async getLeads(limit = 50, offset = 0) {
-        const result = await this.query(
-            `SELECT * FROM leads
-             ORDER BY last_interaction DESC
+        return this.query(
+            `SELECT * FROM leads 
+             WHERE is_active = 1
+             ORDER BY last_interaction DESC 
              LIMIT ? OFFSET ?`,
             [limit, offset]
         );
-
-        return result.results;
     }
 
-    // Obter conversas
+    async getLeadByPhone(phone) {
+        const leads = await this.query('SELECT * FROM leads WHERE phone = ?', [phone]);
+        return leads[0] || null;
+    }
+
+    async updateLead(id, data) {
+        const fields = [];
+        const params = [];
+        
+        for (const [key, value] of Object.entries(data)) {
+            if (['name', 'email', 'company', 'tags', 'notes', 'is_active'].includes(key)) {
+                fields.push(`${key} = ?`);
+                params.push(key === 'tags' ? JSON.stringify(value) : value);
+            }
+        }
+        
+        if (fields.length === 0) return;
+        
+        fields.push('updated_at = CURRENT_TIMESTAMP');
+        params.push(id);
+        
+        await this.run(
+            `UPDATE leads SET ${fields.join(', ')} WHERE id = ?`,
+            params
+        );
+    }
+
+    // ==================== CONVERSATIONS ====================
+
+    async getOrCreateConversation(chatId, leadId, chatType = 'private') {
+        const existing = await this.query(
+            'SELECT * FROM conversations WHERE chat_id = ?',
+            [chatId]
+        );
+
+        if (existing.length > 0) {
+            return existing[0];
+        }
+
+        await this.run(
+            `INSERT INTO conversations (chat_id, lead_id, chat_type) VALUES (?, ?, ?)`,
+            [chatId, leadId, chatType]
+        );
+
+        const newConv = await this.query('SELECT * FROM conversations WHERE chat_id = ?', [chatId]);
+        return newConv[0];
+    }
+
     async getConversations(limit = 50, offset = 0) {
-        const result = await this.query(
-            `SELECT c.*, l.name, l.phone
+        return this.query(
+            `SELECT c.id, c.chat_id, c.chat_type, c.is_bot_active, c.last_message_at, 
+                    c.message_count, c.created_at, c.lead_id,
+                    l.name, l.phone, l.email
              FROM conversations c
              LEFT JOIN leads l ON c.lead_id = l.id
              ORDER BY c.last_message_at DESC
              LIMIT ? OFFSET ?`,
             [limit, offset]
         );
-
-        return result.results;
     }
 
-    // Obter mensagens de uma conversa
+    async getConversationByChatId(chatId) {
+        const convs = await this.query('SELECT * FROM conversations WHERE chat_id = ?', [chatId]);
+        return convs[0] || null;
+    }
+
+    async updateConversation(chatId, data) {
+        const fields = [];
+        const params = [];
+        
+        for (const [key, value] of Object.entries(data)) {
+            if (['is_bot_active', 'chat_type'].includes(key)) {
+                fields.push(`${key} = ?`);
+                params.push(value);
+            }
+        }
+        
+        if (fields.length === 0) return;
+        
+        params.push(chatId);
+        
+        await this.run(
+            `UPDATE conversations SET ${fields.join(', ')} WHERE chat_id = ?`,
+            params
+        );
+    }
+
+    async setBotActiveForChat(chatId, isActive) {
+        await this.run(
+            `UPDATE conversations SET is_bot_active = ? WHERE chat_id = ?`,
+            [isActive ? 1 : 0, chatId]
+        );
+    }
+
+    async isBotActiveForChat(chatId) {
+        const conv = await this.query(
+            'SELECT is_bot_active FROM conversations WHERE chat_id = ?',
+            [chatId]
+        );
+        return conv[0]?.is_bot_active !== 0;
+    }
+
+    // ==================== MESSAGES ====================
+
+    async saveMessage(conversationId, data) {
+        const { messageId, direction, text, intent, confidence, entities, isBot, method } = data;
+        
+        await this.run(
+            `INSERT INTO messages (conversation_id, message_id, direction, message_text, intent, confidence, entities, is_bot_response)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+            [
+                conversationId,
+                messageId || null,
+                direction,
+                text || '',
+                intent || null,
+                confidence || null,
+                entities ? JSON.stringify(entities) : null,
+                isBot ? 1 : 0
+            ]
+        );
+
+        // Atualiza contagem e última mensagem na conversa
+        await this.run(
+            `UPDATE conversations 
+             SET message_count = message_count + 1, 
+                 last_message_at = CURRENT_TIMESTAMP
+             WHERE id = ?`,
+            [conversationId]
+        );
+
+        // Atualiza estatísticas do dia
+        await this.updateDailyStats(isBot);
+    }
+
     async getMessages(conversationId, limit = 100) {
-        const result = await this.query(
-            `SELECT * FROM messages
-             WHERE conversation_id = ?
-             ORDER BY created_at DESC
+        return this.query(
+            `SELECT id, conversation_id, message_id, direction, message_text as text, 
+                    intent, confidence, entities, is_bot_response as is_bot, created_at
+             FROM messages 
+             WHERE conversation_id = ? 
+             ORDER BY created_at ASC 
              LIMIT ?`,
             [conversationId, limit]
         );
-
-        return result.results.reverse();
     }
 
-    // Obter estatísticas do dia
+    async getMessagesByChatId(chatId, limit = 100) {
+        return this.query(
+            `SELECT m.id, m.conversation_id, m.message_id, m.direction, 
+                    m.message_text as text, m.intent, m.confidence, m.entities, 
+                    m.is_bot_response as is_bot, m.created_at
+             FROM messages m
+             JOIN conversations c ON m.conversation_id = c.id
+             WHERE c.chat_id = ?
+             ORDER BY m.created_at ASC
+             LIMIT ?`,
+            [chatId, limit]
+        );
+    }
+
+    async getRecentMessages(conversationId, limit = 10) {
+        const messages = await this.query(
+            `SELECT direction, message_text as text, intent, created_at 
+             FROM messages 
+             WHERE conversation_id = ? 
+             ORDER BY created_at DESC 
+             LIMIT ?`,
+            [conversationId, limit]
+        );
+        return messages.reverse();
+    }
+
+    // ==================== STATS ====================
+
+    async updateDailyStats(isBot = false) {
+        const today = new Date().toISOString().split('T')[0];
+        
+        // Cria ou atualiza registro do dia
+        await this.run(`
+            INSERT INTO statistics (date, total_messages, bot_responses)
+            VALUES (?, 1, ?)
+            ON CONFLICT(date) DO UPDATE SET 
+                total_messages = total_messages + 1,
+                bot_responses = bot_responses + ?
+        `, [today, isBot ? 1 : 0, isBot ? 1 : 0]);
+    }
+
     async getTodayStats() {
-        const result = await this.query(
-            `SELECT * FROM statistics
-             WHERE date = DATE('now')
-             LIMIT 1`
+        const today = new Date().toISOString().split('T')[0];
+        
+        // Busca estatísticas da tabela statistics
+        const statsRow = await this.query(
+            `SELECT * FROM statistics WHERE date = ?`,
+            [today]
         );
 
-        if (result.results.length === 0) {
-            // Criar entrada para hoje
-            await this.query(
-                `INSERT INTO statistics (date) VALUES (DATE('now'))`
-            );
-            return {
-                total_messages: 0,
-                total_conversations: 0,
-                new_leads: 0,
-                bot_responses: 0
-            };
+        // Conta novos leads de hoje
+        const leadsCount = await this.query(
+            `SELECT COUNT(*) as count FROM leads WHERE date(created_at) = ?`,
+            [today]
+        );
+
+        // Conta conversas ativas hoje
+        const convsCount = await this.query(
+            `SELECT COUNT(DISTINCT conversation_id) as count 
+             FROM messages 
+             WHERE date(created_at) = ?`,
+            [today]
+        );
+
+        const stats = statsRow[0] || {};
+        
+        return {
+            total_messages: stats.total_messages || 0,
+            total_conversations: convsCount[0]?.count || 0,
+            new_leads: leadsCount[0]?.count || 0,
+            bot_responses: stats.bot_responses || 0
+        };
+    }
+
+    async getStats(days = 7) {
+        return this.query(`
+            SELECT date, total_messages, total_conversations, new_leads, bot_responses
+            FROM statistics
+            WHERE date >= date('now', '-' || ? || ' days')
+            ORDER BY date DESC
+        `, [days]);
+    }
+
+    // ==================== CONFIG ====================
+
+    async getConfig(key) {
+        const configs = await this.query('SELECT value FROM bot_config WHERE key = ?', [key]);
+        if (!configs.length) return null;
+        
+        const value = configs[0].value;
+        if (value === 'true') return true;
+        if (value === 'false') return false;
+        try {
+            return JSON.parse(value);
+        } catch {
+            return value;
         }
-
-        return result.results[0];
     }
 
-    // Incrementar estatística
-    async incrementStat(field) {
-        await this.query(
-            `INSERT INTO statistics (date, ${field})
-             VALUES (DATE('now'), 1)
-             ON CONFLICT(date) DO UPDATE SET
-                ${field} = ${field} + 1`,
-            []
+    async setConfig(key, value) {
+        const strValue = typeof value === 'boolean' ? String(value) : 
+                         typeof value === 'object' ? JSON.stringify(value) : String(value);
+        
+        await this.run(
+            `INSERT INTO bot_config (key, value, updated_at) 
+             VALUES (?, ?, CURRENT_TIMESTAMP)
+             ON CONFLICT(key) DO UPDATE SET value = ?, updated_at = CURRENT_TIMESTAMP`,
+            [key, strValue, strValue]
         );
     }
 
-    // Inicializar banco de dados (executar schema)
-    async initialize(schemaSQL) {
-        const statements = schemaSQL
-            .split(';')
-            .map(s => s.trim())
-            .filter(s => s.length > 0);
-
-        console.log(`📤 Executando ${statements.length} statements no D1...`);
-
-        // D1 API não aceita batch de statements muito grandes via HTTP
-        // Vamos executar um por um
-        const results = [];
-        for (const sql of statements) {
-            try {
-                const result = await this.query(sql);
-                results.push(result);
-            } catch (error) {
-                console.error(`❌ Erro no SQL: ${sql.substring(0, 60)}...`);
-                throw error;
+    async getAllConfig() {
+        const configs = await this.query('SELECT key, value FROM bot_config');
+        const result = {};
+        
+        for (const { key, value } of configs) {
+            if (value === 'true') {
+                result[key] = true;
+            } else if (value === 'false') {
+                result[key] = false;
+            } else {
+                try {
+                    result[key] = JSON.parse(value);
+                } catch {
+                    result[key] = value;
+                }
             }
         }
+        
+        return result;
+    }
 
-        console.log('✅ Database initialized successfully');
-        return results;
+    // ==================== IGNORED CHATS ====================
+
+    async isIgnoredChat(chatId) {
+        const result = await this.query(
+            'SELECT id FROM ignored_chats WHERE chat_id = ?',
+            [chatId]
+        );
+        return result.length > 0;
+    }
+
+    async ignoreChat(chatId, chatName, reason) {
+        await this.run(
+            `INSERT OR IGNORE INTO ignored_chats (chat_id, chat_name, reason) VALUES (?, ?, ?)`,
+            [chatId, chatName || null, reason || null]
+        );
+    }
+
+    async unignoreChat(chatId) {
+        await this.run('DELETE FROM ignored_chats WHERE chat_id = ?', [chatId]);
     }
 }
 

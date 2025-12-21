@@ -1,437 +1,438 @@
-// Dashboard App - WhatsApp Bot
-class BotDashboard {
-    constructor() {
-        this.currentPage = 'dashboard';
-        this.currentConversation = null;
-        this.init();
-    }
 
-    init() {
-        this.setupNavigation();
-        this.checkConnection();
-        this.loadDashboard();
-        this.setupEventListeners();
 
-        // Auto-refresh a cada 10 segundos
-        setInterval(() => {
-            this.checkConnection();
-            if (this.currentPage === 'dashboard') {
-                this.loadDashboard();
-            }
-        }, 10000);
-    }
+// ===== NAVIGATION =====
+const navItems = document.querySelectorAll('.nav-item');
+const pages = document.querySelectorAll('.page');
+const pageTitle = document.getElementById('page-title');
+const pageSubtitle = document.getElementById('page-subtitle');
 
-    setupNavigation() {
-        const navItems = document.querySelectorAll('.nav-item');
+const pageTitles = {
+    'dashboard': { title: 'Dashboard', subtitle: 'Visão geral do seu funil de vendas' },
+    'conversations': { title: 'Conversas', subtitle: 'Gerencie suas conversas do WhatsApp' },
+    'leads': { title: 'Leads', subtitle: 'Base de contatos e oportunidades' },
+    'test-nlp': { title: 'Testar NLP', subtitle: 'Simule conversas com o sistema determinístico' },
+    'test-gemini': { title: 'Testar Gemini', subtitle: 'Configure e teste a integração com IA' },
+    'config': { title: 'Configurações', subtitle: 'Personalize o comportamento do bot' }
+};
 
-        navItems.forEach(item => {
-            item.addEventListener('click', (e) => {
-                e.preventDefault();
+navItems.forEach(item => {
+    item.addEventListener('click', (e) => {
+        e.preventDefault();
+        const page = item.dataset.page;
+        
+        navItems.forEach(i => i.classList.remove('active'));
+        item.classList.add('active');
+        
+        pages.forEach(p => p.classList.remove('active'));
+        document.getElementById(`page-${page}`).classList.add('active');
+        
+        const info = pageTitles[page];
+        pageTitle.textContent = info.title;
+        pageSubtitle.textContent = info.subtitle;
 
-                const page = item.dataset.page;
+        // Load specific data
+        if (page === 'test-gemini') loadGeminiStatus();
+        if (page === 'leads') loadLeads();
+        if (page === 'conversations') loadConversations();
+    });
+});
 
-                // Update active nav
-                navItems.forEach(nav => nav.classList.remove('active'));
-                item.classList.add('active');
-
-                // Show page
-                this.showPage(page);
-            });
-        });
-    }
-
-    showPage(page) {
-        // Hide all pages
-        document.querySelectorAll('.page').forEach(p => {
-            p.classList.remove('active');
-        });
-
-        // Show selected page
-        const pageElement = document.getElementById(`page-${page}`);
-        if (pageElement) {
-            pageElement.classList.add('active');
-            this.currentPage = page;
-
-            // Update title
-            const titles = {
-                'dashboard': 'Dashboard',
-                'conversations': 'Conversas',
-                'leads': 'Leads',
-                'test': 'Testar Bot',
-                'config': 'Configurações'
-            };
-
-            document.getElementById('page-title').textContent = titles[page];
-
-            // Load page data
-            this.loadPageData(page);
+// ===== STATUS CHECK =====
+async function checkStatus() {
+    try {
+        const res = await fetch('/api/status');
+        const data = await res.json();
+        const dot = document.getElementById('status-dot');
+        const text = document.getElementById('status-text');
+        
+        if (data.connected) {
+            dot.className = 'status-indicator online';
+            text.textContent = data.user?.name || 'Conectado';
+        } else {
+            dot.className = 'status-indicator offline';
+            text.textContent = 'Desconectado';
         }
-    }
-
-    async loadPageData(page) {
-        switch (page) {
-            case 'dashboard':
-                await this.loadDashboard();
-                break;
-            case 'conversations':
-                await this.loadConversations();
-                break;
-            case 'leads':
-                await this.loadLeads();
-                break;
-            case 'config':
-                await this.loadConfig();
-                break;
-        }
-    }
-
-    async checkConnection() {
-        try {
-            const response = await fetch('/api/status');
-            const data = await response.json();
-
-            const statusDot = document.querySelector('.status-dot');
-            const statusText = document.querySelector('.status-text');
-
-            if (data.connected) {
-                statusDot.classList.add('connected');
-                statusDot.classList.remove('disconnected');
-                statusText.textContent = `Conectado: ${data.user.name || 'Bot'}`;
-            } else {
-                statusDot.classList.add('disconnected');
-                statusDot.classList.remove('connected');
-                statusText.textContent = 'Desconectado';
-            }
-        } catch (error) {
-            console.error('Error checking connection:', error);
-        }
-    }
-
-    async loadDashboard() {
-        try {
-            // Load stats
-            const statsResponse = await fetch('/api/stats');
-            const stats = await statsResponse.json();
-
-            document.getElementById('stat-messages').textContent = stats.total_messages || 0;
-            document.getElementById('stat-leads').textContent = stats.new_leads || 0;
-            document.getElementById('stat-conversations').textContent = stats.total_conversations || 0;
-            document.getElementById('stat-bot-responses').textContent = stats.bot_responses || 0;
-
-            // Load recent conversations
-            const conversationsResponse = await fetch('/api/conversations?limit=5');
-            const conversations = await conversationsResponse.json();
-
-            const container = document.getElementById('recent-conversations');
-            container.innerHTML = '';
-
-            if (conversations.length === 0) {
-                container.innerHTML = '<p class="placeholder">Nenhuma conversa ainda</p>';
-                return;
-            }
-
-            conversations.forEach(conv => {
-                const item = document.createElement('div');
-                item.className = 'conversation-item';
-                item.innerHTML = `
-                    <div class="conversation-header">
-                        <span class="conversation-name">${conv.name || conv.phone || 'Desconhecido'}</span>
-                        <span class="conversation-time">${this.formatTime(conv.last_message_at)}</span>
-                    </div>
-                    <div class="conversation-preview">
-                        ${conv.chat_type === 'group' ? '👥 Grupo' : '💬 Chat privado'} • ${conv.message_count} mensagens
-                    </div>
-                `;
-                container.appendChild(item);
-            });
-        } catch (error) {
-            console.error('Error loading dashboard:', error);
-        }
-    }
-
-    async loadConversations() {
-        try {
-            const response = await fetch('/api/conversations');
-            const conversations = await response.json();
-
-            const container = document.getElementById('conversations-list');
-            container.innerHTML = '';
-
-            if (conversations.length === 0) {
-                container.innerHTML = '<p class="placeholder">Nenhuma conversa</p>';
-                return;
-            }
-
-            conversations.forEach(conv => {
-                const item = document.createElement('div');
-                item.className = 'conversation-item';
-                item.dataset.chatId = conv.chat_id;
-                item.dataset.convId = conv.id;
-                item.innerHTML = `
-                    <div class="conversation-header">
-                        <span class="conversation-name">${conv.name || conv.phone || 'Desconhecido'}</span>
-                        <span class="conversation-time">${this.formatTime(conv.last_message_at)}</span>
-                    </div>
-                    <div class="conversation-preview">
-                        ${conv.message_count} mensagens
-                    </div>
-                `;
-
-                item.addEventListener('click', () => {
-                    this.loadMessages(conv.id, conv.chat_id, conv.name || conv.phone);
-                });
-
-                container.appendChild(item);
-            });
-        } catch (error) {
-            console.error('Error loading conversations:', error);
-        }
-    }
-
-    async loadMessages(conversationId, chatId, name) {
-        try {
-            const response = await fetch(`/api/messages/${conversationId}`);
-            const messages = await response.json();
-
-            // Show chat area
-            document.querySelector('.chat-empty').style.display = 'none';
-            document.getElementById('chat-messages').classList.remove('hidden');
-
-            // Update header
-            document.getElementById('chat-contact-name').textContent = name;
-
-            // Store current conversation
-            this.currentConversation = { id: conversationId, chatId };
-
-            // Render messages
-            const container = document.getElementById('messages-container');
-            container.innerHTML = '';
-
-            messages.forEach(msg => {
-                const messageDiv = document.createElement('div');
-                messageDiv.className = `message ${msg.direction}`;
-                messageDiv.innerHTML = `
-                    <div class="message-bubble">
-                        ${msg.message_text}
-                        <div class="message-info">
-                            ${this.formatTime(msg.created_at)}
-                            ${msg.intent ? `• ${msg.intent}` : ''}
-                        </div>
-                    </div>
-                `;
-                container.appendChild(messageDiv);
-            });
-
-            container.scrollTop = container.scrollHeight;
-        } catch (error) {
-            console.error('Error loading messages:', error);
-        }
-    }
-
-    async loadLeads() {
-        try {
-            const response = await fetch('/api/leads');
-            const leads = await response.json();
-
-            const tbody = document.getElementById('leads-tbody');
-            tbody.innerHTML = '';
-
-            if (leads.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="6" class="placeholder">Nenhum lead cadastrado</td></tr>';
-                return;
-            }
-
-            leads.forEach(lead => {
-                const tr = document.createElement('tr');
-                tr.innerHTML = `
-                    <td>${lead.name || '-'}</td>
-                    <td>${lead.phone}</td>
-                    <td>${lead.email || '-'}</td>
-                    <td>${lead.company || '-'}</td>
-                    <td>${this.formatTime(lead.last_interaction)}</td>
-                    <td>
-                        <span class="badge ${lead.is_active ? 'badge-success' : 'badge-danger'}">
-                            ${lead.is_active ? 'Ativo' : 'Inativo'}
-                        </span>
-                    </td>
-                `;
-                tbody.appendChild(tr);
-            });
-        } catch (error) {
-            console.error('Error loading leads:', error);
-        }
-    }
-
-    async loadConfig() {
-        try {
-            const response = await fetch('/api/config');
-            const config = await response.json();
-
-            // Set config values
-            document.getElementById('config-bot-enabled').checked = config.bot_enabled;
-            document.getElementById('config-auto-save-leads').checked = config.auto_save_leads;
-            document.getElementById('config-respond-groups').checked = config.respond_to_groups;
-            document.getElementById('config-respond-channels').checked = config.respond_to_channels;
-            document.getElementById('config-business-hours').checked = config.business_hours_only;
-            document.getElementById('config-hours-start').value = config.business_hours_start;
-            document.getElementById('config-hours-end').value = config.business_hours_end;
-            document.getElementById('config-welcome-message').value = config.welcome_message;
-            document.getElementById('config-away-message').value = config.away_message;
-        } catch (error) {
-            console.error('Error loading config:', error);
-        }
-    }
-
-    async saveConfig() {
-        try {
-            const config = {
-                bot_enabled: document.getElementById('config-bot-enabled').checked,
-                auto_save_leads: document.getElementById('config-auto-save-leads').checked,
-                respond_to_groups: document.getElementById('config-respond-groups').checked,
-                respond_to_channels: document.getElementById('config-respond-channels').checked,
-                business_hours_only: document.getElementById('config-business-hours').checked,
-                business_hours_start: document.getElementById('config-hours-start').value,
-                business_hours_end: document.getElementById('config-hours-end').value,
-                welcome_message: document.getElementById('config-welcome-message').value,
-                away_message: document.getElementById('config-away-message').value
-            };
-
-            const response = await fetch('/api/config', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(config)
-            });
-
-            if (response.ok) {
-                alert('Configurações salvas com sucesso!');
-            }
-        } catch (error) {
-            console.error('Error saving config:', error);
-            alert('Erro ao salvar configurações');
-        }
-    }
-
-    setupEventListeners() {
-        // Save config button
-        const saveConfigBtn = document.getElementById('save-config-btn');
-        if (saveConfigBtn) {
-            saveConfigBtn.addEventListener('click', () => this.saveConfig());
-        }
-
-        // Toggle bot button
-        const toggleBotBtn = document.getElementById('toggle-bot-btn');
-        if (toggleBotBtn) {
-            toggleBotBtn.addEventListener('click', () => this.toggleBotForChat());
-        }
-
-        // Test message
-        const testInput = document.getElementById('test-message-input');
-        const testBtn = document.getElementById('test-send-btn');
-
-        if (testInput && testBtn) {
-            testBtn.addEventListener('click', () => this.sendTestMessage());
-            testInput.addEventListener('keypress', (e) => {
-                if (e.key === 'Enter') this.sendTestMessage();
-            });
-        }
-    }
-
-    async sendTestMessage() {
-        const input = document.getElementById('test-message-input');
-        const message = input.value.trim();
-
-        if (!message) return;
-
-        // Add user message
-        const messagesContainer = document.getElementById('test-messages');
-        const userDiv = document.createElement('div');
-        userDiv.className = 'user-message';
-        userDiv.innerHTML = `<p>${message}</p>`;
-        messagesContainer.appendChild(userDiv);
-
-        input.value = '';
-
-        try {
-            // Test NLP
-            const response = await fetch('/api/test', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ message })
-            });
-
-            const result = await response.json();
-
-            // Add bot response
-            const botDiv = document.createElement('div');
-            botDiv.className = 'bot-message';
-            botDiv.innerHTML = `<p>${result.response}</p>`;
-            messagesContainer.appendChild(botDiv);
-
-            messagesContainer.scrollTop = messagesContainer.scrollHeight;
-
-            // Show NLP analysis
-            const nlpResult = document.getElementById('nlp-result');
-            nlpResult.innerHTML = `
-                <div class="nlp-item">
-                    <strong>Intent:</strong> ${result.intent}<br>
-                    <strong>Confidence:</strong> ${(result.confidence * 100).toFixed(1)}%
-                </div>
-                ${Object.keys(result.entities).length > 0 ? `
-                    <div class="nlp-item">
-                        <strong>Entidades:</strong><br>
-                        ${Object.entries(result.entities).map(([key, value]) =>
-                            `${key}: ${value}`
-                        ).join('<br>')}
-                    </div>
-                ` : ''}
-                ${result.context.isUrgent ? '<div class="nlp-item"><strong>⚠️ Mensagem urgente detectada</strong></div>' : ''}
-            `;
-        } catch (error) {
-            console.error('Error testing message:', error);
-        }
-    }
-
-    async toggleBotForChat() {
-        if (!this.currentConversation) return;
-
-        // Implementar toggle
-        console.log('Toggle bot for chat:', this.currentConversation);
-    }
-
-    formatTime(timestamp) {
-        if (!timestamp) return '-';
-
-        const date = new Date(timestamp);
-        const now = new Date();
-        const diff = now - date;
-
-        // Menos de 1 minuto
-        if (diff < 60000) {
-            return 'Agora';
-        }
-
-        // Menos de 1 hora
-        if (diff < 3600000) {
-            const mins = Math.floor(diff / 60000);
-            return `${mins}m atrás`;
-        }
-
-        // Menos de 24 horas
-        if (diff < 86400000) {
-            const hours = Math.floor(diff / 3600000);
-            return `${hours}h atrás`;
-        }
-
-        // Formato de data
-        return date.toLocaleDateString('pt-BR', {
-            day: '2-digit',
-            month: '2-digit',
-            year: '2-digit'
-        });
+    } catch {
+        document.getElementById('status-dot').className = 'status-indicator offline';
+        document.getElementById('status-text').textContent = 'Erro';
     }
 }
 
-// Initialize
-document.addEventListener('DOMContentLoaded', () => {
-    new BotDashboard();
-});
+// ===== DASHBOARD =====
+async function loadStats() {
+try {
+const res = await fetch('/api/stats');
+const data = await res.json();
+
+document.getElementById('metric-messages').textContent = data.total_messages || 0;
+document.getElementById('metric-leads').textContent = data.new_leads || 0;
+document.getElementById('metric-conversion').textContent = 
+    data.total_conversations > 0 
+        ? Math.round((data.bot_responses / data.total_messages) * 100) + '%' 
+        : '0%';
+
+// Pipeline
+if (data.pipeline) {
+    document.getElementById('stage-inicio').textContent = data.pipeline.inicio || 0;
+    document.getElementById('stage-explorando').textContent = data.pipeline.explorando || 0;
+    document.getElementById('stage-negociando').textContent = data.pipeline.negociando || 0;
+    document.getElementById('stage-fechando').textContent = data.pipeline.fechando || 0;
+}
+} catch (e) {
+console.error('Erro ao carregar stats:', e);
+}
+}
+
+// ===== LEADS =====
+async function loadLeads() {
+    try {
+        const res = await fetch('/api/leads?limit=50');
+        const leads = await res.json();
+        const tbody = document.getElementById('leads-tbody');
+        
+        if (!leads.length) {
+            tbody.innerHTML = '<tr><td colspan="6" class="empty-state">Nenhum lead encontrado</td></tr>';
+            return;
+        }
+
+        tbody.innerHTML = leads.map(lead => `
+            <tr>
+                <td>
+                    <div class="lead-name-cell">
+                        <div class="lead-avatar">${(lead.name || '?')[0].toUpperCase()}</div>
+                        <div>
+                            <div style="font-weight: 500;">${lead.name || 'Sem nome'}</div>
+                            <div style="font-size: 11px; color: var(--text-muted);">${lead.email || '-'}</div>
+                        </div>
+                    </div>
+                </td>
+                <td>${lead.phone || '-'}</td>
+                <td>${lead.company || '-'}</td>
+                <td><span class="lead-status new">Novo</span></td>
+                <td>${lead.last_interaction ? new Date(lead.last_interaction).toLocaleDateString('pt-BR') : '-'}</td>
+                <td>
+                    <button class="btn btn-secondary" style="padding: 6px 12px; font-size: 12px;">Ver</button>
+                </td>
+            </tr>
+        `).join('');
+    } catch {
+        document.getElementById('leads-tbody').innerHTML = '<tr><td colspan="6" class="empty-state">Erro ao carregar</td></tr>';
+    }
+}
+
+// ===== CONVERSATIONS =====
+async function loadConversations() {
+    try {
+        const res = await fetch('/api/conversations?limit=30');
+        const convs = await res.json();
+        const list = document.getElementById('conversations-list');
+        
+        if (!convs.length) {
+            list.innerHTML = '<div class="empty-state"><p>Nenhuma conversa</p></div>';
+            return;
+        }
+
+        list.innerHTML = convs.map(conv => `
+            <div class="conversation-item" onclick="loadChat('${conv.chat_id}', '${conv.name || conv.phone}')">
+                <div class="conv-avatar">${(conv.name || conv.phone || '?')[0].toUpperCase()}</div>
+                <div class="conv-info">
+                    <div class="conv-name">${conv.name || conv.phone || 'Desconhecido'}</div>
+                    <div class="conv-preview">${conv.message_count} mensagens</div>
+                </div>
+                <div class="conv-meta">
+                    <div class="conv-time">${conv.last_message_at ? new Date(conv.last_message_at).toLocaleTimeString('pt-BR', {hour: '2-digit', minute: '2-digit'}) : '-'}</div>
+                </div>
+            </div>
+        `).join('');
+    } catch {}
+}
+
+async function loadChat(chatId, name) {
+document.getElementById('chat-empty').classList.add('hidden');
+document.getElementById('chat-container').classList.remove('hidden');
+document.getElementById('chat-contact-name').textContent = name;
+document.getElementById('chat-avatar').textContent = (name || '?')[0].toUpperCase();
+
+const messagesContainer = document.getElementById('chat-messages');
+messagesContainer.innerHTML = '<div style="text-align: center; color: #888; padding: 20px;">Carregando...</div>';
+
+try {
+// Busca por chat_id (ex: 5511999999999@s.whatsapp.net)
+const res = await fetch(`/api/messages/${encodeURIComponent(chatId)}`);
+const messages = await res.json();
+
+if (!messages.length) {
+    messagesContainer.innerHTML = '<div style="text-align: center; color: #888; padding: 20px;">Nenhuma mensagem</div>';
+    return;
+}
+
+messagesContainer.innerHTML = messages.map(msg => `
+    <div class="message ${msg.direction === 'incoming' ? 'incoming' : 'outgoing'}">
+        ${escapeHtml(msg.text || '')}
+        <div class="message-time">
+            ${new Date(msg.created_at).toLocaleTimeString('pt-BR', {hour: '2-digit', minute: '2-digit'})}
+            ${msg.intent ? ` • ${msg.intent}` : ''}
+            ${msg.method ? ` • ${msg.method}` : ''}
+        </div>
+    </div>
+`).join('');
+
+messagesContainer.scrollTop = messagesContainer.scrollHeight;
+
+} catch (e) {
+messagesContainer.innerHTML = `<div style="color: #ff6b6b; padding: 20px;">Erro: ${e.message}</div>`;
+}
+}
+
+// ===== NLP TEST =====
+async function testNLP() {
+    const input = document.getElementById('nlp-input');
+    const messages = document.getElementById('nlp-messages');
+    const analysis = document.getElementById('nlp-analysis');
+    const text = input.value.trim();
+    
+    if (!text) return;
+
+    messages.innerHTML += `<div class="message outgoing">${escapeHtml(text)}</div>`;
+    input.value = '';
+
+    try {
+        const res = await fetch('/api/test', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ message: text })
+        });
+        const data = await res.json();
+
+        messages.innerHTML += `<div class="message incoming">${escapeHtml(data.response || 'Sem resposta')}</div>`;
+        messages.scrollTop = messages.scrollHeight;
+
+        // Update analysis
+        analysis.innerHTML = `
+            <div class="analysis-section">
+                <div class="analysis-label">Intent Detectada</div>
+                <div class="analysis-value intent">
+                    <span class="intent-name">${data.intent || 'unknown'}</span>
+                    <div>
+                        <span style="font-size: 12px; color: var(--text-muted); margin-right: 8px;">${Math.round((data.confidence || 0) * 100)}%</span>
+                        <div class="confidence-bar">
+                            <div class="confidence-fill" style="width: ${(data.confidence || 0) * 100}%"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="analysis-section">
+                <div class="analysis-label">Ação Executada</div>
+                <div class="analysis-value">${data.action || '-'}</div>
+            </div>
+            <div class="analysis-section">
+                <div class="analysis-label">Estado</div>
+                <div class="analysis-value state-info">
+                    Stage: <code>${data.state?.stage || '-'}</code><br>
+                    Assunto: <code>${data.state?.assunto || '-'}</code><br>
+                    Plano: <code>${data.state?.plano || '-'}</code><br>
+                    Cliente: <code>${data.state?.cliente?.nome || '-'}</code>
+                </div>
+            </div>
+            <div class="analysis-section">
+                <div class="analysis-label">Entidades</div>
+                <div class="analysis-value">
+                    <pre style="font-size: 11px; margin: 0;">${JSON.stringify(data.entities || {}, null, 2)}</pre>
+                </div>
+            </div>
+        `;
+    } catch (e) {
+        messages.innerHTML += `<div class="message incoming" style="background: rgba(255,82,82,0.2);">Erro: ${e.message}</div>`;
+    }
+}
+
+// ===== GEMINI =====
+let currentModel = 'gemini-pro';
+
+async function loadGeminiStatus() {
+    try {
+        const res = await fetch('/api/gemini-status');
+        const data = await res.json();
+        
+        document.getElementById('gemini-status').innerHTML = data.configured 
+            ? '<span class="success">✅ Configurado</span>' 
+            : '<span class="error">❌ Não configurado</span>';
+        document.getElementById('gemini-router').innerHTML = data.routerEnabled 
+            ? '<span class="success">Ativo</span>' 
+            : '<span class="error">Inativo</span>';
+        document.getElementById('gemini-model').textContent = data.model || '-';
+        document.getElementById('gemini-apikey').textContent = data.apiKeyPreview || '-';
+        
+        currentModel = data.model;
+        document.getElementById('model-selector').value = data.model;
+    } catch {}
+}
+
+async function loadGeminiModels() {
+    const list = document.getElementById('models-list');
+    const selector = document.getElementById('model-selector');
+    
+    list.innerHTML = '<div style="text-align: center; padding: 20px;"><span class="loading-spinner"></span> Carregando...</div>';
+
+    try {
+        const res = await fetch('/api/gemini-models');
+        const data = await res.json();
+
+        if (!data.success || !data.models?.length) {
+            list.innerHTML = `<div class="empty-state" style="padding: 20px;"><p style="color: var(--danger);">${data.error || 'Nenhum modelo encontrado'}</p></div>`;
+            return;
+        }
+
+        list.innerHTML = data.models.map(m => `
+            <div class="model-item" onclick="selectModel('${m.name}')">
+                <div class="model-item-name">${m.name}</div>
+                <div class="model-item-info">${m.displayName || ''} | In: ${m.inputTokenLimit} | Out: ${m.outputTokenLimit}</div>
+            </div>
+        `).join('');
+
+        selector.innerHTML = data.models.map(m => 
+            `<option value="${m.name}" ${m.name === currentModel ? 'selected' : ''}>${m.name}</option>`
+        ).join('');
+    } catch (e) {
+        list.innerHTML = `<div class="empty-state" style="padding: 20px;"><p style="color: var(--danger);">Erro: ${e.message}</p></div>`;
+    }
+}
+
+function selectModel(name) {
+    document.getElementById('model-selector').value = name;
+    currentModel = name;
+}
+
+async function testGeminiConnection() {
+    const btn = document.getElementById('test-gemini-btn');
+    const result = document.getElementById('gemini-test-result');
+    const model = document.getElementById('model-selector').value || currentModel;
+
+    btn.disabled = true;
+    btn.innerHTML = '<span class="loading-spinner"></span> Testando...';
+    result.classList.remove('hidden', 'success', 'error');
+    result.classList.add('loading');
+    result.textContent = `Testando ${model}...`;
+
+    try {
+        const res = await fetch('/api/gemini-test', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ model })
+        });
+        const data = await res.json();
+
+        result.classList.remove('loading');
+        if (data.success) {
+            result.classList.add('success');
+            result.textContent = `✅ SUCESSO!\n\nModelo: ${data.model}\nLatência: ${data.latency}ms\n\nResposta:\n${data.response}`;
+        } else {
+            result.classList.add('error');
+            result.textContent = `❌ FALHA!\n\nErro: ${data.error}`;
+        }
+    } catch (e) {
+        result.classList.remove('loading');
+        result.classList.add('error');
+        result.textContent = `❌ Erro: ${e.message}`;
+    }
+
+    btn.disabled = false;
+    btn.innerHTML = '🧪 Testar Conexão';
+}
+
+async function sendGeminiMessage() {
+    const input = document.getElementById('gemini-input');
+    const messages = document.getElementById('gemini-messages');
+    const btn = document.getElementById('gemini-send-btn');
+    const text = input.value.trim();
+    const model = document.getElementById('model-selector').value || currentModel;
+
+    if (!text) return;
+
+    messages.innerHTML += `<div class="gemini-msg user">${escapeHtml(text)}</div>`;
+    input.value = '';
+    btn.disabled = true;
+
+    const loadingId = 'load-' + Date.now();
+    messages.innerHTML += `<div class="gemini-msg bot" id="${loadingId}"><span class="loading-spinner"></span> Digitando...</div>`;
+    messages.scrollTop = messages.scrollHeight;
+
+    try {
+        const res = await fetch('/api/gemini-chat', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ message: text, model })
+        });
+        const data = await res.json();
+
+        document.getElementById(loadingId)?.remove();
+
+        if (data.success) {
+            messages.innerHTML += `
+                <div class="gemini-msg bot">
+                    ${escapeHtml(data.response)}
+                    <div class="meta">${data.latency}ms</div>
+                </div>
+            `;
+        } else {
+            messages.innerHTML += `<div class="gemini-msg bot" style="background: rgba(255,82,82,0.2);">❌ ${data.error}</div>`;
+        }
+    } catch (e) {
+        document.getElementById(loadingId)?.remove();
+        messages.innerHTML += `<div class="gemini-msg bot" style="background: rgba(255,82,82,0.2);">❌ ${e.message}</div>`;
+    }
+
+    btn.disabled = false;
+    messages.scrollTop = messages.scrollHeight;
+}
+
+// ===== CONFIG =====
+async function loadConfig() {
+    try {
+        const res = await fetch('/api/config');
+        const config = await res.json();
+        
+        document.getElementById('config-bot-enabled').checked = config.bot_enabled === true || config.bot_enabled === 'true';
+        document.getElementById('config-auto-save-leads').checked = config.auto_save_leads === true || config.auto_save_leads === 'true';
+        document.getElementById('config-respond-groups').checked = config.respond_to_groups === true || config.respond_to_groups === 'true';
+        document.getElementById('config-welcome-message').value = config.welcome_message || '';
+        document.getElementById('config-away-message').value = config.away_message || '';
+    } catch {}
+}
+
+async function saveConfig() {
+    try {
+        await fetch('/api/config', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                bot_enabled: document.getElementById('config-bot-enabled').checked,
+                auto_save_leads: document.getElementById('config-auto-save-leads').checked,
+                respond_to_groups: document.getElementById('config-respond-groups').checked,
+                welcome_message: document.getElementById('config-welcome-message').value,
+                away_message: document.getElementById('config-away-message').value
+            })
+        });
+        alert('Configurações salvas!');
+    } catch (e) {
+        alert('Erro ao salvar: ' + e.message);
+    }
+}
+
+// ===== UTILS =====
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
+function loadAllData() {
+    checkStatus();
+    loadStats();
+    loadConfig();
+}
+
+// ===== INIT =====
+loadAllData();
+setInterval(checkStatus, 15000);
+setInterval(loadStats, 60000);

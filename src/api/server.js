@@ -1,9 +1,10 @@
-// src/api/server.js
+// FILE: src/api/server.js
 const http = require('http');
-const url = require('url');
 const fs = require('fs').promises;
 const path = require('path');
 const nlpAnalyzer = require('../nlp/analyzer.js');
+const gemini = require('../llm/gemini.js');
+const llmRouter = require('../nlp/llm-router.js');
 
 class BotAPI {
     constructor(database, whatsappBot) {
@@ -24,31 +25,28 @@ class BotAPI {
                 return;
             }
 
-            const parsedUrl = url.parse(req.url, true);
+            const parsedUrl = new URL(req.url, `http://${req.headers.host}`);
             const pathname = parsedUrl.pathname;
 
             try {
-                if (pathname === '/' || pathname.startsWith('/index.html')) {
-                    await this.serveFile(res, 'public/index.html', 'text/html');
-                    return;
+                // Arquivos estáticos
+                if (pathname === '/' || pathname === '/index.html') {
+                    return this.serveFile(res, 'public/index.html', 'text/html');
                 }
-
                 if (pathname.startsWith('/css/')) {
-                    await this.serveFile(res, `public${pathname}`, 'text/css');
-                    return;
+                    return this.serveFile(res, `public${pathname}`, 'text/css');
                 }
-
                 if (pathname.startsWith('/js/')) {
-                    await this.serveFile(res, `public${pathname}`, 'application/javascript');
-                    return;
+                    return this.serveFile(res, `public${pathname}`, 'application/javascript');
                 }
 
+                // API
                 if (pathname.startsWith('/api/')) {
-                    await this.handleAPI(req, res, pathname, parsedUrl.query);
-                } else {
-                    res.writeHead(404);
-                    res.end('Not Found');
+                    return this.handleAPI(req, res, pathname, Object.fromEntries(parsedUrl.searchParams));
                 }
+
+                res.writeHead(404);
+                res.end('Not Found');
             } catch (error) {
                 console.error('Server error:', error);
                 res.writeHead(500);
@@ -67,7 +65,7 @@ class BotAPI {
             const content = await fs.readFile(fullPath);
             res.writeHead(200, { 'Content-Type': contentType });
             res.end(content);
-        } catch (error) {
+        } catch {
             res.writeHead(404);
             res.end('File not found');
         }
@@ -76,116 +74,187 @@ class BotAPI {
     async handleAPI(req, res, pathname, query) {
         const method = req.method;
         const parts = pathname.split('/').filter(p => p);
-
         parts.shift();
-
         const endpoint = parts[0];
 
-        if (endpoint === 'status' && method === 'GET') {
-            return this.getStatus(res);
+        // ===== GEMINI =====
+        if (endpoint === 'gemini-status' && method === 'GET') {
+            return this.getGeminiStatus(res);
+        }
+        if (endpoint === 'gemini-models' && method === 'GET') {
+            return this.listGeminiModels(res);
+        }
+        if (endpoint === 'gemini-test' && method === 'POST') {
+            return this.testGemini(req, res);
+        }
+        if (endpoint === 'gemini-chat' && method === 'POST') {
+            return this.chatGemini(req, res);
         }
 
+        // ===== EXISTENTES =====
+        if (endpoint === 'status' && method === 'GET') return this.getStatus(res);
+        if (endpoint === 'health' && method === 'GET') return this.sendJSON(res, 200, { status: 'ok' });
         if (endpoint === 'config') {
             if (method === 'GET') return this.getConfig(res);
             if (method === 'POST') return this.updateConfig(req, res);
         }
-
-        if (endpoint === 'leads') {
-            if (method === 'GET') return this.getLeads(res, query);
+        if (endpoint === 'leads' && method === 'GET') return this.getLeads(res, query);
+        if (endpoint === 'conversations' && method === 'GET') return this.getConversations(res, query);
+            if (endpoint === 'messages' && parts[1]) {
+        const chatId = decodeURIComponent(parts[1]);
+        // Se for número, busca por conversation_id, senão por chat_id
+        if (/^\d+$/.test(chatId)) {
+            return this.getMessages(res, parseInt(chatId));
+        } else {
+            return this.getMessagesByChatId(res, chatId);
         }
-
-        if (endpoint === 'conversations') {
-            if (method === 'GET') return this.getConversations(res, query);
-        }
-
-        if (endpoint === 'messages' && parts[1]) {
-            if (method === 'GET') return this.getMessages(res, parts[1]);
-        }
-
-        if (endpoint === 'send' && method === 'POST') {
-            return this.sendMessage(req, res);
-        }
-
-        if (endpoint === 'conversation') {
-            const chatId = parts[1];
-            if (method === 'PUT') return this.updateConversation(req, res, chatId);
-        }
-
-        if (endpoint === 'stats' && method === 'GET') {
-            return this.getStats(res);
-        }
-
-        if (endpoint === 'test' && method === 'POST') {
-            return this.testNLP(req, res);
-        }
+    }
+        if (endpoint === 'send' && method === 'POST') return this.sendMessage(req, res);
+        if (endpoint === 'conversation' && parts[1] && method === 'PUT') return this.updateConversation(req, res, parts[1]);
+        if (endpoint === 'stats' && method === 'GET') return this.getStats(res);
+        if (endpoint === 'test' && method === 'POST') return this.testNLP(req, res);
 
         res.writeHead(404);
         res.end(JSON.stringify({ error: 'Endpoint not found' }));
     }
 
+    // ===== GEMINI HANDLERS =====
+
+    async getGeminiStatus(res) {
+        const status = gemini.getStatus();
+        status.routerEnabled = llmRouter.enabled;
+        this.sendJSON(res, 200, status);
+    }
+
+    async listGeminiModels(res) {
+        try {
+            console.log('📋 Listando modelos Gemini...');
+            const models = await gemini.listModels();
+            console.log(`   ✅ ${models.length} modelos encontrados`);
+            this.sendJSON(res, 200, { success: true, models });
+        } catch (error) {
+            console.log(`   ❌ Erro: ${error.message}`);
+            this.sendJSON(res, 200, { success: false, error: error.message, models: [] });
+        }
+    }
+
+    async testGemini(req, res) {
+        try {
+            const body = await this.getBody(req);
+            const { model } = body ? JSON.parse(body) : {};
+            
+            // Usar modelo temporário se fornecido
+            const originalModel = gemini.model;
+            if (model) gemini.setModel(model);
+            
+            console.log(`🧪 Testando Gemini (${gemini.model})...`);
+            const result = await gemini.testConnection();
+            
+            // Restaurar modelo original
+            if (model) gemini.setModel(originalModel);
+            
+            console.log(`   ${result.success ? '✅' : '❌'} ${result.success ? 'OK' : result.error} (${result.latency}ms)`);
+            this.sendJSON(res, 200, result);
+        } catch (error) {
+            this.sendJSON(res, 200, { success: false, error: error.message });
+        }
+    }
+
+    async chatGemini(req, res) {
+        try {
+            const body = await this.getBody(req);
+            const { message, model } = JSON.parse(body);
+
+            if (!message) {
+                return this.sendJSON(res, 400, { success: false, error: 'Mensagem não fornecida' });
+            }
+
+            // Usar modelo temporário se fornecido
+            const originalModel = gemini.model;
+            if (model) gemini.setModel(model);
+
+            console.log(`🤖 Gemini Chat (${gemini.model}): "${message.substring(0, 40)}..."`);
+
+            const systemPrompt = `Você é um atendente humano de uma agência de marketing digital chamada "Império Lord".
+
+REGRAS:
+1. Respostas CURTAS: 1 a 3 linhas
+2. NO MÁXIMO 1 pergunta por mensagem
+3. Seja natural, como um vendedor real
+4. Conduza para conversão (site/landing/tráfego/redes)
+
+SERVIÇOS:
+- Site simples: R$ 2.500 | Completo: R$ 4.500 | Loja: R$ 5.500
+- Landing page: R$ 997 a R$ 1.500
+- Tráfego pago: R$ 1.500 a R$ 4.500/mês
+- Gestão de redes: R$ 997 a R$ 3.500/mês
+
+Responda de forma natural e direta.`;
+
+            const startTime = Date.now();
+            const result = await gemini.generate(systemPrompt, message);
+            
+            // Restaurar modelo original
+            if (model) gemini.setModel(originalModel);
+
+            console.log(`   ✅ OK (${Date.now() - startTime}ms)`);
+            
+            this.sendJSON(res, 200, {
+                success: true,
+                response: result.text,
+                latency: Date.now() - startTime,
+                model: model || originalModel
+            });
+
+        } catch (error) {
+            console.error(`   ❌ Erro: ${error.message}`);
+            this.sendJSON(res, 200, { success: false, error: error.message });
+        }
+    }
+
+    // ===== HANDLERS EXISTENTES =====
+
     async getStatus(res) {
         const sock = this.bot?.getSocket?.();
         const isConnected = sock && sock.user;
-        const user = isConnected ? sock.user : null;
-
         this.sendJSON(res, 200, {
             connected: !!isConnected,
-            user: user ? {
-                id: user.id,
-                name: user.name
-            } : null,
-            uptime: process.uptime()
+            user: isConnected ? { id: sock.user.id, name: sock.user.name } : null,
+            uptime: process.uptime(),
+            gemini: gemini.getStatus()
         });
     }
 
     async getConfig(res) {
-        if (!this.db) {
-            return this.sendJSON(res, 200, {});
-        }
+        if (!this.db) return this.sendJSON(res, 200, {});
         const config = await this.db.getAllConfig();
         this.sendJSON(res, 200, config);
     }
 
     async updateConfig(req, res) {
-        if (!this.db) {
-            return this.sendJSON(res, 503, { error: 'Database not available' });
-        }
+        if (!this.db) return this.sendJSON(res, 503, { error: 'Database not available' });
         const body = await this.getBody(req);
         const data = JSON.parse(body);
-
         for (const [key, value] of Object.entries(data)) {
             await this.db.setConfig(key, value);
         }
-
         this.sendJSON(res, 200, { success: true });
     }
 
     async getLeads(res, query) {
-        if (!this.db) {
-            return this.sendJSON(res, 200, []);
-        }
-        const limit = parseInt(query.limit) || 50;
-        const offset = parseInt(query.offset) || 0;
-
-        const leads = await this.db.getLeads(limit, offset);
+        if (!this.db) return this.sendJSON(res, 200, []);
+        const leads = await this.db.getLeads(parseInt(query.limit) || 50, parseInt(query.offset) || 0);
         this.sendJSON(res, 200, leads);
     }
 
     async getConversations(res, query) {
-        if (!this.db) {
-            return this.sendJSON(res, 200, []);
-        }
-        const limit = parseInt(query.limit) || 50;
-        const offset = parseInt(query.offset) || 0;
-
-        const conversations = await this.db.getConversations(limit, offset);
+        if (!this.db) return this.sendJSON(res, 200, []);
+        const conversations = await this.db.getConversations(parseInt(query.limit) || 50, parseInt(query.offset) || 0);
         this.sendJSON(res, 200, conversations);
     }
 
     async getMessages(res, conversationId) {
-        if (!this.db) {
-            return this.sendJSON(res, 200, []);
-        }
+        if (!this.db) return this.sendJSON(res, 200, []);
         const messages = await this.db.getMessages(parseInt(conversationId));
         this.sendJSON(res, 200, messages);
     }
@@ -193,12 +262,8 @@ class BotAPI {
     async sendMessage(req, res) {
         const body = await this.getBody(req);
         const { chatId, message } = JSON.parse(body);
-
         const sock = this.bot?.getSocket?.();
-        if (!sock) {
-            return this.sendJSON(res, 503, { error: 'Bot not connected' });
-        }
-
+        if (!sock) return this.sendJSON(res, 503, { error: 'Bot not connected' });
         try {
             await sock.sendMessage(chatId, { text: message });
             this.sendJSON(res, 200, { success: true });
@@ -208,38 +273,59 @@ class BotAPI {
     }
 
     async updateConversation(req, res, chatId) {
-        if (!this.db) {
-            return this.sendJSON(res, 503, { error: 'Database not available' });
-        }
+        if (!this.db) return this.sendJSON(res, 503, { error: 'Database not available' });
         const body = await this.getBody(req);
         const { is_bot_active } = JSON.parse(body);
-
         await this.db.setBotActiveForChat(chatId, is_bot_active);
         this.sendJSON(res, 200, { success: true });
     }
 
+// Adicione o novo método:
+    async getMessagesByChatId(res, chatId) {
+        if (!this.db) return this.sendJSON(res, 200, []);
+        try {
+            const messages = await this.db.getMessagesByChatId(chatId);
+            this.sendJSON(res, 200, messages);
+        } catch (e) {
+            this.sendJSON(res, 500, { error: e.message });
+        }
+    }
+
+    // Modifique getStats para incluir pipeline:
     async getStats(res) {
         if (!this.db) {
             return this.sendJSON(res, 200, {
                 total_messages: 0,
                 total_conversations: 0,
                 new_leads: 0,
-                bot_responses: 0
+                bot_responses: 0,
+                pipeline: { inicio: 0, explorando: 0, negociando: 0, fechando: 0 }
             });
         }
-        const stats = await this.db.getTodayStats();
-        this.sendJSON(res, 200, stats);
+        
+        try {
+            const stats = await this.db.getTodayStats();
+            const pipeline = await this.db.getPipelineStats();
+            stats.pipeline = pipeline;
+            this.sendJSON(res, 200, stats);
+        } catch (e) {
+            this.sendJSON(res, 200, {
+                total_messages: 0,
+                total_conversations: 0,
+                new_leads: 0,
+                bot_responses: 0,
+                pipeline: { inicio: 0, explorando: 0, negociando: 0, fechando: 0 }
+            });
+        }
     }
 
     async testNLP(req, res) {
         try {
             const body = await this.getBody(req);
             const { message } = JSON.parse(body);
-
-            const result = await nlpAnalyzer.analyze(message, 'test_user');
+            const result = await nlpAnalyzer.analyze(message, 'test_user_' + Date.now());
             this.sendJSON(res, 200, result);
         } catch (error) {
-            console.error('Erro no teste NLP:', error);
             this.sendJSON(res, 500, { error: error.message });
         }
     }

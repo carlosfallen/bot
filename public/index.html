@@ -1,255 +1,422 @@
+<!-- FILE: public/index.html -->
 <!DOCTYPE html>
 <html lang="pt-BR">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>WhatsApp Bot - Dashboard</title>
-    <link rel="stylesheet" href="/css/style.css">
+    <title>Império Lord - Central de Vendas</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="css/styles.css">
 </head>
 <body>
-    <div class="container">
-        <!-- Sidebar -->
+    <div class="app-layout">
+        <!-- Sidebar Navigation -->
         <aside class="sidebar">
-            <div class="logo">
-                <h2>🤖 WhatsApp Bot</h2>
+            <div class="brand-header">
+                <div class="brand-logo">
+                    <div class="brand-icon">👑</div>
+                    <div class="brand-text">
+                        <h1>Império Lord</h1>
+                        <span>Central de Vendas</span>
+                    </div>
+                </div>
             </div>
-            <nav class="nav">
-                <a href="#" class="nav-item active" data-page="dashboard">
-                    <span class="icon">📊</span>
+
+            <nav class="nav-menu">
+                <div class="nav-section-label">Principal</div>
+                <a class="nav-item active" data-page="dashboard">
+                    <span class="nav-icon">📊</span>
                     Dashboard
                 </a>
-                <a href="#" class="nav-item" data-page="conversations">
-                    <span class="icon">💬</span>
+                <a class="nav-item" data-page="conversations">
+                    <span class="nav-icon">💬</span>
                     Conversas
+                    <span class="nav-badge" id="unread-badge" style="display: none;">0</span>
                 </a>
-                <a href="#" class="nav-item" data-page="leads">
-                    <span class="icon">👥</span>
+                <a class="nav-item" data-page="leads">
+                    <span class="nav-icon">👥</span>
                     Leads
                 </a>
-                <a href="#" class="nav-item" data-page="test">
-                    <span class="icon">🧪</span>
-                    Testar Bot
+
+                <div class="nav-section-label">Ferramentas</div>
+                <a class="nav-item" data-page="test-nlp">
+                    <span class="nav-icon">🧠</span>
+                    Testar NLP
                 </a>
-                <a href="#" class="nav-item" data-page="config">
-                    <span class="icon">⚙️</span>
+                <a class="nav-item" data-page="test-gemini">
+                    <span class="nav-icon">✨</span>
+                    Testar Gemini
+                </a>
+
+                <div class="nav-section-label">Sistema</div>
+                <a class="nav-item" data-page="config">
+                    <span class="nav-icon">⚙️</span>
                     Configurações
                 </a>
             </nav>
+
+            <div class="connection-widget">
+                <div class="connection-status">
+                    <div class="status-indicator" id="status-dot"></div>
+                    <div class="status-info">
+                        <div class="label">WhatsApp</div>
+                        <div class="value" id="status-text">Verificando...</div>
+                    </div>
+                </div>
+            </div>
         </aside>
 
         <!-- Main Content -->
-        <main class="main">
-            <!-- Header -->
-            <header class="header">
-                <div class="header-left">
-                    <h1 id="page-title">Dashboard</h1>
+        <main class="main-content">
+            <div class="top-bar">
+                <div class="page-header">
+                    <h2 id="page-title">Dashboard</h2>
+                    <p id="page-subtitle">Visão geral do seu funil de vendas</p>
                 </div>
-                <div class="header-right">
-                    <div class="connection-status" id="connection-status">
-                        <span class="status-dot"></span>
-                        <span class="status-text">Verificando...</span>
-                    </div>
-                </div>
-            </header>
-
-            <!-- Dashboard Page -->
-            <div id="page-dashboard" class="page active">
-                <div class="stats-grid">
-                    <div class="stat-card">
-                        <div class="stat-icon">💬</div>
-                        <div class="stat-info">
-                            <h3>Mensagens Hoje</h3>
-                            <p class="stat-value" id="stat-messages">0</p>
-                        </div>
-                    </div>
-                    <div class="stat-card">
-                        <div class="stat-icon">👥</div>
-                        <div class="stat-info">
-                            <h3>Novos Leads</h3>
-                            <p class="stat-value" id="stat-leads">0</p>
-                        </div>
-                    </div>
-                    <div class="stat-card">
-                        <div class="stat-icon">💬</div>
-                        <div class="stat-info">
-                            <h3>Conversas Ativas</h3>
-                            <p class="stat-value" id="stat-conversations">0</p>
-                        </div>
-                    </div>
-                    <div class="stat-card">
-                        <div class="stat-icon">🤖</div>
-                        <div class="stat-info">
-                            <h3>Respostas Bot</h3>
-                            <p class="stat-value" id="stat-bot-responses">0</p>
-                        </div>
-                    </div>
-                </div>
-
-                <div class="recent-section">
-                    <h2>Conversas Recentes</h2>
-                    <div id="recent-conversations" class="conversations-list">
-                        <p class="loading">Carregando...</p>
-                    </div>
+                <div class="top-actions">
+                    <button class="btn btn-secondary" onclick="loadAllData()">
+                        🔄 Atualizar
+                    </button>
                 </div>
             </div>
 
-            <!-- Conversations Page -->
-            <div id="page-conversations" class="page">
-                <div class="conversations-container">
-                    <div class="conversations-sidebar">
-                        <div class="search-box">
-                            <input type="text" placeholder="Buscar conversas..." id="search-conversations">
+            <div class="page-container">
+                <!-- Dashboard Page -->
+                <div id="page-dashboard" class="page active">
+                    <div class="sales-metrics-grid">
+                        <div class="metric-card revenue">
+                            <div class="metric-header">
+                                <div class="metric-icon">💰</div>
+                                <span class="metric-trend up" id="revenue-trend">+12%</span>
+                            </div>
+                            <div class="metric-value" id="metric-revenue">R$ 0</div>
+                            <div class="metric-label">Receita do Mês</div>
                         </div>
-                        <div id="conversations-list" class="conversations-list">
-                            <p class="loading">Carregando...</p>
+                        <div class="metric-card leads">
+                            <div class="metric-header">
+                                <div class="metric-icon">👥</div>
+                                <span class="metric-trend up">+8%</span>
+                            </div>
+                            <div class="metric-value" id="metric-leads">0</div>
+                            <div class="metric-label">Novos Leads</div>
+                        </div>
+                        <div class="metric-card conversion">
+                            <div class="metric-header">
+                                <div class="metric-icon">📈</div>
+                            </div>
+                            <div class="metric-value" id="metric-conversion">0%</div>
+                            <div class="metric-label">Taxa de Conversão</div>
+                        </div>
+                        <div class="metric-card messages">
+                            <div class="metric-header">
+                                <div class="metric-icon">💬</div>
+                            </div>
+                            <div class="metric-value" id="metric-messages">0</div>
+                            <div class="metric-label">Mensagens Hoje</div>
                         </div>
                     </div>
-                    <div class="chat-area">
-                        <div class="chat-empty">
-                            <p>Selecione uma conversa para visualizar</p>
-                        </div>
-                        <div id="chat-messages" class="chat-messages hidden">
-                            <div class="chat-header">
-                                <h3 id="chat-contact-name">Contato</h3>
-                                <div class="chat-actions">
-                                    <button id="toggle-bot-btn" class="btn btn-sm">Desativar Bot</button>
+
+                    <div class="dashboard-grid">
+                        <div class="widget">
+                            <div class="widget-header">
+                                <span class="widget-title">📊 Pipeline de Vendas</span>
+                            </div>
+                            <div class="widget-body">
+                                <div class="pipeline-stages">
+                                    <div class="pipeline-stage inicio">
+                                        <div class="stage-count" id="stage-inicio">0</div>
+                                        <div class="stage-label">Início</div>
+                                    </div>
+                                    <div class="pipeline-stage explorando">
+                                        <div class="stage-count" id="stage-explorando">0</div>
+                                        <div class="stage-label">Explorando</div>
+                                    </div>
+                                    <div class="pipeline-stage negociando">
+                                        <div class="stage-count" id="stage-negociando">0</div>
+                                        <div class="stage-label">Negociando</div>
+                                    </div>
+                                    <div class="pipeline-stage fechando">
+                                        <div class="stage-count" id="stage-fechando">0</div>
+                                        <div class="stage-label">Fechando</div>
+                                    </div>
                                 </div>
                             </div>
-                            <div id="messages-container" class="messages-container"></div>
                         </div>
-                    </div>
-                </div>
-            </div>
 
-            <!-- Leads Page -->
-            <div id="page-leads" class="page">
-                <div class="table-container">
-                    <table class="leads-table">
-                        <thead>
-                            <tr>
-                                <th>Nome</th>
-                                <th>Telefone</th>
-                                <th>Email</th>
-                                <th>Empresa</th>
-                                <th>Última Interação</th>
-                                <th>Status</th>
-                            </tr>
-                        </thead>
-                        <tbody id="leads-tbody">
-                            <tr>
-                                <td colspan="6" class="loading">Carregando...</td>
-                            </tr>
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-
-            <!-- Test Page -->
-            <div id="page-test" class="page">
-                <div class="test-container">
-                    <div class="test-chat">
-                        <div class="test-header">
-                            <h3>💬 Testar Respostas do Bot</h3>
-                        </div>
-                        <div id="test-messages" class="test-messages">
-                            <div class="message bot-message">
-                                <p>Olá! Digite uma mensagem para testar o NLP do bot.</p>
+                        <div class="widget">
+                            <div class="widget-header">
+                                <span class="widget-title">🔥 Conversas Recentes</span>
                             </div>
-                        </div>
-                        <div class="test-input">
-                            <input type="text" id="test-message-input" placeholder="Digite sua mensagem...">
-                            <button id="test-send-btn" class="btn">Enviar</button>
-                        </div>
-                    </div>
-                    <div class="test-info">
-                        <h3>📊 Análise NLP</h3>
-                        <div id="nlp-result" class="nlp-result">
-                            <p class="placeholder">Envie uma mensagem para ver a análise NLP</p>
-                        </div>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Config Page -->
-            <div id="page-config" class="page">
-                <div class="config-container">
-                    <div class="config-section">
-                        <h2>Configurações Gerais</h2>
-                        <div class="config-group">
-                            <label class="switch-label">
-                                <input type="checkbox" id="config-bot-enabled" class="switch">
-                                <span class="switch-slider"></span>
-                                Bot Ativo Globalmente
-                            </label>
-                        </div>
-                        <div class="config-group">
-                            <label class="switch-label">
-                                <input type="checkbox" id="config-auto-save-leads" class="switch">
-                                <span class="switch-slider"></span>
-                                Salvar Contatos Automaticamente
-                            </label>
-                        </div>
-                    </div>
-
-                    <div class="config-section">
-                        <h2>Onde o Bot Responde</h2>
-                        <div class="config-group">
-                            <label class="switch-label">
-                                <input type="checkbox" id="config-respond-groups" class="switch">
-                                <span class="switch-slider"></span>
-                                Responder em Grupos
-                            </label>
-                        </div>
-                        <div class="config-group">
-                            <label class="switch-label">
-                                <input type="checkbox" id="config-respond-channels" class="switch">
-                                <span class="switch-slider"></span>
-                                Responder em Canais
-                            </label>
-                        </div>
-                    </div>
-
-                    <div class="config-section">
-                        <h2>Horário de Funcionamento</h2>
-                        <div class="config-group">
-                            <label class="switch-label">
-                                <input type="checkbox" id="config-business-hours" class="switch">
-                                <span class="switch-slider"></span>
-                                Apenas Horário Comercial
-                            </label>
-                        </div>
-                        <div class="config-row">
-                            <div class="config-group">
-                                <label>Início</label>
-                                <input type="time" id="config-hours-start" class="input">
-                            </div>
-                            <div class="config-group">
-                                <label>Fim</label>
-                                <input type="time" id="config-hours-end" class="input">
+                            <div class="widget-body" id="recent-conversations">
+                                <div class="empty-state">
+                                    <div class="empty-state-icon">💬</div>
+                                    <p>Nenhuma conversa ainda</p>
+                                </div>
                             </div>
                         </div>
                     </div>
+                </div>
 
-                    <div class="config-section">
-                        <h2>Mensagens Automáticas</h2>
-                        <div class="config-group">
-                            <label>Mensagem de Boas-vindas</label>
-                            <textarea id="config-welcome-message" class="textarea" rows="3"></textarea>
+                <!-- Conversations Page -->
+                <div id="page-conversations" class="page">
+                    <div class="conversations-layout">
+                        <div class="conversations-sidebar">
+                            <div class="search-box">
+                                <input type="text" class="search-input" placeholder="Buscar conversas..." id="search-conversations">
+                            </div>
+                            <div class="conversations-list" id="conversations-list">
+                                <div class="empty-state">
+                                    <p>Carregando...</p>
+                                </div>
+                            </div>
                         </div>
-                        <div class="config-group">
-                            <label>Mensagem Fora do Horário</label>
-                            <textarea id="config-away-message" class="textarea" rows="3"></textarea>
+                        <div class="chat-area">
+                            <div class="chat-empty" id="chat-empty">
+                                <div>
+                                    <div class="empty-state-icon">💬</div>
+                                    <p>Selecione uma conversa para visualizar</p>
+                                </div>
+                            </div>
+                            <div id="chat-container" class="hidden">
+                                <div class="chat-header">
+                                    <div class="conv-avatar" id="chat-avatar">?</div>
+                                    <div class="chat-contact-info">
+                                        <div class="chat-contact-name" id="chat-contact-name">Contato</div>
+                                        <div class="chat-contact-status" id="chat-contact-status">Online</div>
+                                    </div>
+                                    <button class="btn btn-secondary btn-sm" id="toggle-bot-btn">🤖 Bot Ativo</button>
+                                </div>
+                                <div class="chat-messages" id="chat-messages"></div>
+                                <div class="chat-input-area">
+                                    <input type="text" class="chat-input" placeholder="Digite uma mensagem..." id="chat-input">
+                                    <button class="btn btn-primary" id="chat-send-btn">Enviar</button>
+                                </div>
+                            </div>
                         </div>
                     </div>
+                </div>
 
-                    <div class="config-actions">
-                        <button id="save-config-btn" class="btn btn-primary">Salvar Configurações</button>
+                <!-- Leads Page -->
+                <div id="page-leads" class="page">
+                    <div class="leads-toolbar">
+                        <div class="filter-tabs">
+                            <button class="filter-tab active" data-filter="all">Todos</button>
+                            <button class="filter-tab" data-filter="new">Novos</button>
+                            <button class="filter-tab" data-filter="qualified">Qualificados</button>
+                            <button class="filter-tab" data-filter="proposal">Proposta</button>
+                            <button class="filter-tab" data-filter="won">Ganhos</button>
+                        </div>
+                        <div style="flex: 1;"></div>
+                        <button class="btn btn-primary">+ Novo Lead</button>
+                    </div>
+                    <div class="leads-table-container">
+                        <table class="leads-table">
+                            <thead>
+                                <tr>
+                                    <th>Lead</th>
+                                    <th>Telefone</th>
+                                    <th>Interesse</th>
+                                    <th>Status</th>
+                                    <th>Última Interação</th>
+                                    <th>Ações</th>
+                                </tr>
+                            </thead>
+                            <tbody id="leads-tbody">
+                                <tr>
+                                    <td colspan="6" class="empty-state">Carregando...</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- Test NLP Page -->
+                <div id="page-test-nlp" class="page">
+                    <div class="test-layout">
+                        <div class="test-chat-panel">
+                            <div class="test-chat-header">
+                                <h3>🧠 Simulador de Conversa NLP</h3>
+                            </div>
+                            <div class="test-messages" id="nlp-messages">
+                                <div class="message incoming">
+                                    Olá! Este é o simulador de NLP. Digite mensagens para ver como o bot responde usando apenas o sistema determinístico (sem Gemini).
+                                </div>
+                            </div>
+                            <div class="test-input-area">
+                                <input type="text" class="test-input" id="nlp-input" placeholder="Digite uma mensagem para testar..." onkeypress="if(event.key==='Enter')testNLP()">
+                                <button class="btn btn-primary" onclick="testNLP()">Testar</button>
+                            </div>
+                        </div>
+                        <div class="analysis-panel">
+                            <div class="analysis-header">
+                                <h3>📊 Análise da Resposta</h3>
+                            </div>
+                            <div class="analysis-content" id="nlp-analysis">
+                                <div class="empty-state">
+                                    <p>Envie uma mensagem para ver a análise</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Test Gemini Page -->
+                <div id="page-test-gemini" class="page">
+                    <div class="gemini-layout">
+                        <div class="gemini-config-panel">
+                            <div class="config-card">
+                                <div class="config-card-header">🔧 Status do Gemini</div>
+                                <div class="config-card-body">
+                                    <div class="config-grid" id="gemini-status-grid">
+                                        <div class="config-item">
+                                            <div class="config-item-label">Status</div>
+                                            <div class="config-item-value" id="gemini-status">Verificando...</div>
+                                        </div>
+                                        <div class="config-item">
+                                            <div class="config-item-label">Router</div>
+                                            <div class="config-item-value" id="gemini-router">-</div>
+                                        </div>
+                                        <div class="config-item">
+                                            <div class="config-item-label">Modelo</div>
+                                            <div class="config-item-value" id="gemini-model">-</div>
+                                        </div>
+                                        <div class="config-item">
+                                            <div class="config-item-label">API Key</div>
+                                            <div class="config-item-value" id="gemini-apikey">-</div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="config-card">
+                                <div class="config-card-header">🎯 Testar Conexão</div>
+                                <div class="config-card-body">
+                                    <select class="model-selector" id="model-selector">
+                                        <option value="">Selecione um modelo...</option>
+                                    </select>
+                                    <button class="btn btn-success" style="width: 100%;" onclick="testGeminiConnection()" id="test-gemini-btn">
+                                        🧪 Testar Conexão
+                                    </button>
+                                    <div class="test-result-box hidden" id="gemini-test-result"></div>
+                                </div>
+                            </div>
+
+                            <div class="config-card">
+                                <div class="config-card-header">📋 Modelos Disponíveis</div>
+                                <div class="config-card-body">
+                                    <button class="btn btn-secondary" style="width: 100%; margin-bottom: 12px;" onclick="loadGeminiModels()">
+                                        🔄 Carregar Lista
+                                    </button>
+                                    <div class="models-list" id="models-list">
+                                        <div class="empty-state" style="padding: 20px;">
+                                            <p>Clique para carregar</p>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="gemini-chat-panel">
+                            <div class="gemini-chat-header">
+                                <h3>✨ Chat com Gemini</h3>
+                                <p>Teste como o Gemini responde como um vendedor da agência</p>
+                            </div>
+                            <div class="gemini-messages" id="gemini-messages">
+                                <div class="gemini-msg bot">
+                                    Olá! Sou o assistente da Império Lord. Como posso ajudar?
+                                </div>
+                            </div>
+                            <div class="gemini-input-area">
+                                <input type="text" class="gemini-input" id="gemini-input" placeholder="Digite como se fosse um cliente..." onkeypress="if(event.key==='Enter')sendGeminiMessage()">
+                                <button class="btn btn-primary" onclick="sendGeminiMessage()" id="gemini-send-btn">Enviar</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Config Page -->
+                <div id="page-config" class="page">
+                    <div class="config-layout">
+                        <div class="config-section">
+                            <div class="config-section-header">
+                                <h3>⚙️ Configurações Gerais</h3>
+                            </div>
+                            <div class="config-section-body">
+                                <div class="config-row">
+                                    <div class="config-row-info">
+                                        <h4>Bot Ativo Globalmente</h4>
+                                        <p>Ativa ou desativa todas as respostas automáticas</p>
+                                    </div>
+                                    <label class="toggle-switch">
+                                        <input type="checkbox" id="config-bot-enabled">
+                                        <span class="toggle-slider"></span>
+                                    </label>
+                                </div>
+                                <div class="config-row">
+                                    <div class="config-row-info">
+                                        <h4>Salvar Leads Automaticamente</h4>
+                                        <p>Salva novos contatos como leads no sistema</p>
+                                    </div>
+                                    <label class="toggle-switch">
+                                        <input type="checkbox" id="config-auto-save-leads">
+                                        <span class="toggle-slider"></span>
+                                    </label>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="config-section">
+                            <div class="config-section-header">
+                                <h3>💬 Onde o Bot Responde</h3>
+                            </div>
+                            <div class="config-section-body">
+                                <div class="config-row">
+                                    <div class="config-row-info">
+                                        <h4>Responder em Grupos</h4>
+                                        <p>Bot responde em conversas de grupo</p>
+                                    </div>
+                                    <label class="toggle-switch">
+                                        <input type="checkbox" id="config-respond-groups">
+                                        <span class="toggle-slider"></span>
+                                    </label>
+                                </div>
+                                <div class="config-row">
+                                    <div class="config-row-info">
+                                        <h4>Usar Gemini (IA)</h4>
+                                        <p>Usa inteligência artificial para respostas mais naturais</p>
+                                    </div>
+                                    <label class="toggle-switch">
+                                        <input type="checkbox" id="config-gemini-enabled" checked>
+                                        <span class="toggle-slider"></span>
+                                    </label>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="config-section">
+                            <div class="config-section-header">
+                                <h3>📝 Mensagens Automáticas</h3>
+                            </div>
+                            <div class="config-section-body">
+                                <div style="margin-bottom: 16px;">
+                                    <label style="font-size: 13px; font-weight: 500;">Mensagem de Boas-vindas</label>
+                                    <textarea class="config-textarea" id="config-welcome-message" placeholder="Olá! Bem-vindo..."></textarea>
+                                </div>
+                                <div>
+                                    <label style="font-size: 13px; font-weight: 500;">Mensagem Fora do Horário</label>
+                                    <textarea class="config-textarea" id="config-away-message" placeholder="No momento estamos fora do horário..."></textarea>
+                                </div>
+                            </div>
+                        </div>
+
+                        <button class="btn btn-primary" onclick="saveConfig()" style="margin-top: 8px;">
+                            💾 Salvar Configurações
+                        </button>
                     </div>
                 </div>
             </div>
         </main>
     </div>
-
-    <script src="/js/app.js"></script>
+<script src="/js/app.js"></script>
 </body>
 </html>

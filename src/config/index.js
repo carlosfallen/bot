@@ -1,32 +1,46 @@
-// Configurações do Bot
+// FILE: src/config/index.js
 require('dotenv').config();
 
 module.exports = {
-    // Cloudflare D1 Database
     cloudflare: {
-        accountId: process.env.CLOUDFLARE_ACCOUNT_ID || 'f19932f2396bfc72bd1f3d6be3c68c9f',
-        databaseId: process.env.CLOUDFLARE_DATABASE_ID || '9af902f9-f64d-447f-91f4-fd31a0682f0a',
-        apiToken: process.env.CLOUDFLARE_API_TOKEN || 'Is9BNvZbDoUUmYiWzKvtejp1CPqa69RMWzbBEvKV'
+        accountId: process.env.CLOUDFLARE_ACCOUNT_ID,
+        databaseId: process.env.CLOUDFLARE_DATABASE_ID,
+        apiToken: process.env.CLOUDFLARE_API_TOKEN
     },
 
-    // Servidor Web
     server: {
-        port: process.env.PORT || 3000
+        port: process.env.PORT || 3512
     },
 
-    // WhatsApp
     whatsapp: {
         authFolder: 'auth_info',
-        printQRInTerminal: false,
+        printQRInTerminal: true,
         syncFullHistory: false,
-        markOnlineOnConnect: false
+        markOnlineOnConnect: true
     },
 
-    // Bot
     bot: {
         defaultEnabled: true,
         autoSaveLeads: true,
         respondToGroups: false,
         respondToChannels: false
+    },
+
+    // ===== GEMINI CONFIG =====
+    gemini: {
+        enabled: process.env.GEMINI_ENABLED !== 'false',
+        apiKey: process.env.GEMINI_API_KEY || '',
+        model: process.env.GEMINI_MODEL || 'gemini-2.5-flash',
+        timeout: parseInt(process.env.GEMINI_TIMEOUT_MS) || 8000,
+        temperature: parseFloat(process.env.GEMINI_TEMPERATURE) || 0.7,
+        maxTokens: parseInt(process.env.GEMINI_MAX_TOKENS) || 150,
+        confidenceThreshold: parseFloat(process.env.GEMINI_CONFIDENCE_THRESHOLD) || 0.55
+    },
+
+    // ===== TIMEOUTS DE RETOMADA =====
+    timeouts: {
+        active: 10 * 60 * 1000,       // 10 min
+        pause: 2 * 60 * 60 * 1000,    // 2h
+        cold: 24 * 60 * 60 * 1000     // 24h
     }
 };
