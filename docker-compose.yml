@@ -5,6 +5,8 @@ services:
     restart: unless-stopped
     stdin_open: true
     tty: true
+    env_file:
+    - .env
     ports:
       - "3512:3512"
     volumes:
