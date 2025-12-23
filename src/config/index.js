@@ -23,18 +23,26 @@ module.exports = {
         defaultEnabled: true,
         autoSaveLeads: true,
         respondToGroups: false,
-        respondToChannels: false
+        respondToChannels: false,
+        mode: 'full_gemini' // full_gemini ou hybrid
     },
 
-    // ===== GEMINI CONFIG =====
+    // ===== GEMINI CONFIG (FULL MODE) =====
     gemini: {
         enabled: process.env.GEMINI_ENABLED !== 'false',
         apiKey: process.env.GEMINI_API_KEY || '',
-        model: process.env.GEMINI_MODEL || 'gemini-2.5-flash',
-        timeout: parseInt(process.env.GEMINI_TIMEOUT_MS) || 8000,
-        temperature: parseFloat(process.env.GEMINI_TEMPERATURE) || 0.7,
-        maxTokens: parseInt(process.env.GEMINI_MAX_TOKENS) || 150,
-        confidenceThreshold: parseFloat(process.env.GEMINI_CONFIDENCE_THRESHOLD) || 0.55
+        model: process.env.GEMINI_MODEL || 'gemini-2.0-flash-exp',
+        timeout: parseInt(process.env.GEMINI_TIMEOUT_MS) || 10000,
+        temperature: parseFloat(process.env.GEMINI_TEMPERATURE) || 0.8,
+        maxTokens: parseInt(process.env.GEMINI_MAX_TOKENS) || 300,
+        // No full mode, não usamos confidence threshold (sempre usa Gemini)
+        fullMode: true
+    },
+
+    // Embeddings agora são OPCIONAIS (desabilitados em full Gemini)
+    nlp: {
+        useEmbeddings: process.env.NLP_USE_EMBEDDINGS === 'true', // false por padrão
+        embeddingsModel: 'Xenova/all-MiniLM-L6-v2'
     },
 
     // ===== TIMEOUTS DE RETOMADA =====

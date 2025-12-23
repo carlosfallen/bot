@@ -1,22 +1,36 @@
 {
-  "name": "whatsapp-bot-nlp",
-  "version": "3.0.0",
-  "description": "WhatsApp Bot completo com NLP, Dashboard e Cloudflare D1",
-  "author": "Bot Team",
-  "license": "MIT",
+  "name": "imperio-lord-bot",
+  "version": "2.0.0",
+  "description": "WhatsApp Bot com Full Gemini + CRM Automático",
+  "main": "bot.js",
   "scripts": {
     "start": "node bot.js",
-    "dev": "node bot.js",
-    "old": "node bot.js",
-    "init-db": "node scripts/init-db.js",
-    "init-embeddings": "node scripts/init-embeddings.js"
+    "dev": "nodemon bot.js",
+    "test": "node test-crm.js",
+    "migrate": "node -e \"require('http').get('http://localhost:3512/api/migrate-schema', r => console.log('Migração OK'))\"",
+    "dashboard": "open http://localhost:3512"
   },
+  "keywords": [
+    "whatsapp",
+    "bot",
+    "gemini",
+    "crm",
+    "cloudflare",
+    "d1"
+  ],
+  "author": "Império Lord",
+  "license": "MIT",
   "dependencies": {
     "@whiskeysockets/baileys": "^6.7.8",
-    "@xenova/transformers": "^2.17.2",
-    "dotenv": "^16.6.1",
-    "pino": "^8.17.2",
+    "dotenv": "^16.4.5",
+    "pino": "^9.5.0",
     "qrcode-terminal": "^0.12.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.7"
+  },
+  "optionalDependencies": {
+    "@xenova/transformers": "^2.17.2"
   },
   "engines": {
     "node": ">=18.0.0"
