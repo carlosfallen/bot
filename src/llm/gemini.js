@@ -1,253 +1,280 @@
 // FILE: src/llm/gemini.js
-/**
- * CLIENTE GEMINI REST - PARSING ROBUSTO
- */
-
 const config = require('../config/index.js');
 
-class GeminiClient {
+function safeText(value) {
+    if (typeof value !== 'string') return null;
+    const t = value.trim();
+    return t.length > 0 ? t : null;
+}
+
+// ==================== RATE LIMITER ====================
+class RateLimiter {
     constructor() {
-        this.apiKey = config.gemini.apiKey;
-        this.model = config.gemini.model;
-        this.timeout = config.gemini.timeout;
-        this.temperature = config.gemini.temperature;
-        this.maxTokens = config.gemini.maxTokens;
-        this.baseUrl = 'https://generativelanguage.googleapis.com/v1beta';
+        this.queue = [];
+        this.isProcessing = false;
+        this.lastCall = 0;
+        this.minDelay = 4000; 
+        this.penaltyDelay = 60000;
+        this.isPenaltyActive = false;
     }
 
-    isConfigured() {
-        return !!(this.apiKey && this.apiKey.length > 10);
+    add(fn) {
+        return new Promise((resolve, reject) => {
+            if (this.queue.length > 5) return reject(new Error('Bot sobrecarregado (Fila cheia)'));
+            this.queue.push({ fn, resolve, reject });
+            this.process();
+        });
+    }
+
+    async process() {
+        if (this.isProcessing || this.queue.length === 0) return;
+        if (this.isPenaltyActive) return;
+
+        this.isProcessing = true;
+        const now = Date.now();
+        const timeSinceLast = now - this.lastCall;
+        const waitTime = timeSinceLast < this.minDelay ? (this.minDelay - timeSinceLast) : 0;
+
+        if (waitTime > 0) await new Promise(r => setTimeout(r, waitTime));
+
+        const { fn, resolve, reject } = this.queue.shift();
+
+        try {
+            this.lastCall = Date.now();
+            const result = await fn();
+            resolve(result);
+        } catch (e) {
+            if (e.message.includes('429')) {
+                console.log(`🚨 RATE LIMIT! Pausando IA por 60s...`);
+                this.isPenaltyActive = true;
+                this.queue.unshift({ fn, resolve, reject }); // Tenta de novo depois
+                setTimeout(() => {
+                    this.isPenaltyActive = false;
+                    this.isProcessing = false;
+                    this.process();
+                }, this.penaltyDelay);
+                return;
+            }
+            reject(e);
+        } finally {
+            if (!this.isPenaltyActive) {
+                this.isProcessing = false;
+                if (this.queue.length > 0) this.process();
+            }
+        }
+    }
+}
+
+const limiter = new RateLimiter();
+
+// ==================== GEMINI CLIENT ====================
+class GeminiClient {
+    constructor() {
+        this.apiKey = config.gemini?.apiKey || process.env.GEMINI_API_KEY;
+        
+        this.maxTokens = 2000; 
+        
+        this.model = 'gemma-3-27b-it'; // Ou 'gemini-1.5-flash'
+        this.timeout = 60000;
+        this.temperature = 0.7;
+        this.baseUrl = 'https://generativelanguage.googleapis.com/v1beta';
     }
 
     getStatus() {
         return {
             configured: this.isConfigured(),
             model: this.model,
-            timeout: this.timeout,
-            temperature: this.temperature,
-            maxTokens: this.maxTokens,
-            apiKeyPreview: this.apiKey ? `${this.apiKey.substring(0, 8)}...` : 'NÃO CONFIGURADA'
+            apiKey: this.apiKey ? 'OK' : 'MISSING'
         };
     }
 
-    async listModels() {
-        if (!this.isConfigured()) throw new Error('API Key não configurada');
+    isConfigured() {
+        return !!(this.apiKey && this.apiKey.length > 10);
+    }
+    getSystemPrompt() {
+            return `
+    # SUA IDENTIDADE
+    Você é o **Lord**, dono e estrategista da **Império Lord**, uma Agência Digital Full-Service.
+    - Idade: 24 anos.
+    - Personalidade: Empreendedor, visão de águia, parceiro de negócios. Você não é um funcionário, você fala de igual para igual com outros donos de empresa.
+    - Tom de voz: WhatsApp natural, direto, especialista e **zero cara de robô**.
+    - **REGRA DE OURO:** Você não é um livro. Seja breve.
 
-        const url = `${this.baseUrl}/models?key=${this.apiKey}`;
-        const response = await fetch(url);
-        
-        if (!response.ok) {
-            const error = await response.text();
-            throw new Error(`HTTP ${response.status}: ${error}`);
+    # O QUE A IMPÉRIO LORD VENDE
+    1. Sites & E-commerce (Alta performance)
+    2. Tráfego Pago (Ads)
+    3. Automação & Chatbots
+    4. Design & Vídeo
+
+    # MANDAMENTOS DA CONVERSA (ESTILO OBRIGATÓRIO)
+    1. **Seja Breve e Humano:** Máximo de 2 a 3 frases por bloco. Nada de listas (bullet points), nada de emojis, nada de "textão". Fale corrido.
+    2. **Zero Papo de Suporte:** PROIBIDO usar frases passivas ou clichês como: *"posso ajudar em algo mais?", "fico no aguardo", "estamos à disposição", "obrigado pelo contato"*. Você é o dono negociando, não um atendente de telemarketing.
+    3. **Foque no Lucro, não na Ferramenta:** Não fale "tecnologia de carregamento rápido" ou "SEO", fale "o site abre na hora pra vc não perder venda". O cliente quer o resultado.
+    4. **Use <split> Estrategicamente:** Separe a explicação da pergunta de engajamento.
+    * *Certo:* "pra moda a gente foca no visual do checkout. <split> hj vc vende mais no insta ou no site?"
+        * *Errado:* "pra moda a gente foca no visual do checkout. hj vc vende mais no insta ou no site?"
+    5. **Nunca Seja Genérico:** Nada de "a gente faz de tudo". Sempre dê exemplos REAIS do nicho do cliente.
+
+    # REGRAS DE INTERAÇÃO (IMPORTANTE SOBRE NOMES)
+    1. **Se você SABE o nome (está no histórico):** Use-o para gerar conexão. *Ex: "fala jorge, blz?"*
+    2. **Se você NÃO SABE o nome:** **NUNCA INVENTE**. Jamais chame de "amigo", "cliente", "campeão" ou invente um nome aleatório. Use saudações neutras. *Ex: "opa, tudo certo?", "e aí, como tá?"*
+    3. **Descobrindo o nome:** Se a conversa fluir e você precisar do nome para o CRM, pergunte sutilmente: *"antes da gente seguir, como posso te chamar?"*
+
+    # ROTEIRO ADAPTÁVEL
+    1. **Sondagem:** Descubra o nicho.
+    2. **Contexto:** Dê um exemplo curto do nicho dele.
+    3. **Oferta:** Só dê preço depois de gerar valor.
+
+    # SEU ROTEIRO DE VENDAS (A "REGRA DE OURO")
+    Não vomite todos os serviços de uma vez. Siga este fluxo mental:
+
+    1.  **SONDAGEM (O Quebra-Gelo):**
+        Descubra o nicho do cliente primeiro (se ainda não souber).
+        *Ex: "opa, tudo certo? <split> me conta, qual é o seu ramo de atuação hoje?"*
+
+    2.  **APRESENTAÇÃO CONTEXTUAL (O "Pulo do Gato"):**
+        Assim que ele falar o nicho, dê exemplos REAIS de como você ajuda esse nicho específico.
+        *Ex (Se for Dentista): "Show. Pra odonto a gente costuma fazer Landing Page de implantes + Tráfego no Google pra quem busca emergência. Enche a agenda rápido."*
+        *Ex (Se for Loja de Roupa): "Massa. Pra moda o que vira é Tráfego de Carrossel no Insta + uma Loja Virtual rápida pra não perder venda no checkout."*
+
+    3.  **VALORES & FECHAMENTO:**
+        Só fale de preço depois de mostrar que você entendeu a dor dele.
+        Dê uma estimativa baseada no que ele precisa e chame pro fechamento.
+        *Ex: "pra montar essa estrutura completa de tráfego + site, o investimento gira em torno de X. <split> bora marcar um call rapidinho pra eu te mostrar como funciona?"*
+
+    # REGRAS DE ESTILO (PARA PARECER HUMANO)
+    - **Use a tag <split>:** Sempre separe a saudação ou a afirmação da pergunta. Isso simula o envio de duas mensagens.
+    - **Não use listas:** Nada de "1. Sites, 2. Tráfego". Fale corrido: "a gente faz desde o site e tráfego até a edição dos seus vídeos".
+    - **Seja Assertivo:** Você é o especialista. Guie a conversa.
+
+    # CRM (INSTRUÇÃO TÉCNICA)
+    Se o cliente soltar dados, capture no final da mensagem:
+    <crm_update>{"nome": "...", "empresa": "...", "dor": "...", "status": "..."}</crm_update>
+    `;
         }
 
-        const data = await response.json();
-        
-        return (data.models || [])
-            .filter(m => m.supportedGenerationMethods?.includes('generateContent'))
-            .map(m => ({
-                name: m.name.replace('models/', ''),
-                displayName: m.displayName,
-                inputTokenLimit: m.inputTokenLimit,
-                outputTokenLimit: m.outputTokenLimit
-            }));
-    }
-
-    setModel(modelName) {
-        this.model = modelName;
-    }
-
-    async generate(systemPrompt, userPrompt, retries = 1) {
-        if (!this.isConfigured()) {
-            throw new Error('Gemini não configurado');
-        }
-
-        const url = `${this.baseUrl}/models/${this.model}:generateContent?key=${this.apiKey}`;
-
-        // Combinar system + user prompt em uma única mensagem
-        const combinedPrompt = `${systemPrompt}\n\n---\n\nMensagem do cliente:\n"${userPrompt}"\n\nResponda de forma curta e natural:`;
-
-        const body = {
-            contents: [
-                {
-                    role: 'user',
-                    parts: [{ text: combinedPrompt }]
-                }
-            ],
-            generationConfig: {
-                temperature: this.temperature,
-                maxOutputTokens: this.maxTokens,
-                topP: 0.95,
-                topK: 40
-            },
-            safetySettings: [
-                { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" },
-                { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
-                { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_NONE" },
-                { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_NONE" }
-            ]
-        };
-
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), this.timeout);
-
+    // Função para descobrir quais modelos funcionam
+    async listAvailableModels() {
         try {
-            const startTime = Date.now();
-            
-            const response = await fetch(url, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(body),
-                signal: controller.signal
-            });
-
-            clearTimeout(timeoutId);
-            const latency = Date.now() - startTime;
-
-            if (!response.ok) {
-                const status = response.status;
-                const errorBody = await response.text();
-                
-                if ((status === 429 || status >= 500) && retries > 0) {
-                    await this.sleep(1000);
-                    return this.generate(systemPrompt, userPrompt, retries - 1);
-                }
-                
-                throw new Error(`HTTP ${status}: ${errorBody.substring(0, 300)}`);
-            }
-
+            console.log('🔍 Listando modelos disponíveis na sua conta...');
+            const response = await fetch(`${this.baseUrl}/models?key=${this.apiKey}`);
             const data = await response.json();
-            
-            // DEBUG: Log resposta bruta
-            console.log('   📦 Gemini raw:', JSON.stringify(data).substring(0, 200));
-            
-            const result = this.parseResponse(data);
-            result.latency = latency;
-            
-            return result;
-
+            if (data.models) {
+                console.log('\n=== MODELOS DISPONÍVEIS ===');
+                data.models.forEach(m => console.log(`- ${m.name.replace('models/', '')}`));
+                console.log('===========================\n');
+            }
         } catch (e) {
-            clearTimeout(timeoutId);
-            
-            if (e.name === 'AbortError') {
-                throw new Error(`Timeout (${this.timeout}ms)`);
-            }
-            
-            if (retries > 0 && !e.message.includes('Timeout')) {
-                await this.sleep(500);
-                return this.generate(systemPrompt, userPrompt, retries - 1);
-            }
-            
-            throw e;
+            console.error('Erro ao listar modelos:', e.message);
         }
+    }
+
+    async generate(userPrompt, conversationHistory = [], retries = 1) {
+        return limiter.add(async () => {
+            if (!this.isConfigured()) throw new Error('API Key ausente');
+
+            // URL Endpoint
+            const url = `${this.baseUrl}/models/${this.model}:generateContent?key=${this.apiKey}`;
+
+            // Corpo da requisição
+            const body = {
+                contents: [],
+                generationConfig: {
+                    temperature: this.temperature,
+                    maxOutputTokens: this.maxTokens,
+                }
+            };
+
+            // Hack para Gemma (às vezes System Prompt falha na API padrão, então injetamos no histórico)
+            // Se for Gemma, colocamos o system prompt como primeira mensagem do usuário "fake"
+            if (this.model.includes('gemma')) {
+                 body.contents.push({ role: 'user', parts: [{ text: "Instrução do Sistema: " + this.getSystemPrompt() }] });
+                 body.contents.push({ role: 'model', parts: [{ text: "Entendido. Vou agir conforme instruído." }] });
+            } else {
+                 body.systemInstruction = { parts: [{ text: this.getSystemPrompt() }] };
+            }
+
+            // Histórico
+            for (const msg of conversationHistory) {
+                const text = safeText(msg.text);
+                if (!text) continue;
+                const role = (msg.role === 'assistant' || msg.role === 'model') ? 'model' : 'user';
+                body.contents.push({ role, parts: [{ text }] });
+            }
+
+            // Mensagem atual
+            body.contents.push({ role: 'user', parts: [{ text: safeText(userPrompt) || '...' }] });
+
+            let attempts = 0;
+            while (attempts <= retries) {
+                try {
+                    const controller = new AbortController();
+                    const timeoutId = setTimeout(() => controller.abort(), this.timeout);
+
+                    console.log(`🤖 Request para ${this.model} (Tentativa ${attempts + 1})...`);
+
+                    const response = await fetch(url, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(body),
+                        signal: controller.signal
+                    });
+
+                    clearTimeout(timeoutId);
+
+                    if (!response.ok) {
+                        const err = await response.text();
+                        
+                        // SE DER 404, LISTAMOS OS MODELOS CERTOS PRA VOCÊ
+                        if (response.status === 404) {
+                            console.error(`❌ Modelo '${this.model}' não existe! Buscando lista correta...`);
+                            await this.listAvailableModels();
+                            throw new Error(`Modelo errado. Veja a lista no terminal.`);
+                        }
+
+                        if (response.status === 429) {
+                            console.log('⚠️ Rate Limit (429). Esperando 5s...');
+                            await new Promise(r => setTimeout(r, 5000));
+                            throw new Error('429 Rate Limit');
+                        }
+                        
+                        throw new Error(`HTTP ${response.status}: ${err.substring(0, 100)}`);
+                    }
+
+                    const data = await response.json();
+                    return this.parseResponse(data);
+
+                } catch (e) {
+                    attempts++;
+                    if (e.message.includes('404')) throw e; // Não adianta tentar de novo se não existe
+                    if (attempts > retries) throw e;
+                    await new Promise(r => setTimeout(r, 2000));
+                }
+            }
+        });
     }
 
     parseResponse(data) {
-        // Verificar diferentes estruturas de resposta
         let text = '';
-
-        // Estrutura padrão: candidates[0].content.parts[0].text
         if (data?.candidates?.[0]?.content?.parts) {
-            const parts = data.candidates[0].content.parts;
-            text = parts.map(p => p.text || '').join('').trim();
+            text = data.candidates[0].content.parts.map(p => p.text || '').join('').trim();
         }
         
-        // Fallback: candidates[0].text (alguns modelos)
-        if (!text && data?.candidates?.[0]?.text) {
-            text = data.candidates[0].text;
+        if (!text) return { text: '...', crmUpdate: null };
+
+        let crmUpdate = null;
+        const crmMatch = text.match(/<crm_update>\s*(\{[\s\S]+?\})\s*<\/crm_update>/);
+        if (crmMatch) {
+            try {
+                crmUpdate = JSON.parse(crmMatch[1]);
+                text = text.replace(/<crm_update>[\s\S]*?<\/crm_update>/g, '').trim();
+            } catch (e) {}
         }
-
-        // Fallback: response direto
-        if (!text && data?.response) {
-            text = typeof data.response === 'string' ? data.response : JSON.stringify(data.response);
-        }
-
-        // Fallback: text direto
-        if (!text && data?.text) {
-            text = data.text;
-        }
-
-        // Verificar se foi bloqueado por segurança
-        if (!text && data?.candidates?.[0]?.finishReason === 'SAFETY') {
-            throw new Error('Resposta bloqueada por filtro de segurança');
-        }
-
-        // Verificar promptFeedback
-        if (!text && data?.promptFeedback?.blockReason) {
-            throw new Error(`Bloqueado: ${data.promptFeedback.blockReason}`);
-        }
-
-        if (!text) {
-            console.log('   ⚠️ Resposta completa:', JSON.stringify(data));
-            throw new Error('Resposta Gemini vazia');
-        }
-
-        // Limpar e processar texto
-        text = this.cleanText(text);
-
-        // Tentar extrair JSON se presente
-        let parsed = null;
-        try {
-            const jsonMatch = text.match(/\{[\s\S]*"text"[\s\S]*\}/);
-            if (jsonMatch) {
-                parsed = JSON.parse(jsonMatch[0]);
-                if (parsed.text) {
-                    text = this.cleanText(parsed.text);
-                }
-            }
-        } catch {}
-
-        return {
-            text,
-            next_action: parsed?.next_action || 'none',
-            topic: parsed?.topic || 'geral',
-            raw: data?.candidates?.[0]?.content?.parts?.[0]?.text || text,
-            parsed: !!parsed
-        };
+        return { text, crmUpdate };
     }
 
-    cleanText(text) {
-        return text
-            .replace(/```json\n?/g, '')
-            .replace(/```\n?/g, '')
-            .replace(/^\s*\{[\s\S]*"text"\s*:\s*"/m, '')
-            .replace(/"\s*,?\s*"next_action"[\s\S]*$/m, '')
-            .replace(/"\s*\}\s*$/m, '')
-            .replace(/\n{3,}/g, '\n\n')
-            .replace(/^\s+|\s+$/g, '')
-            .substring(0, 500);
-    }
-
-    sleep(ms) {
-        return new Promise(r => setTimeout(r, ms));
-    }
-
-    async testConnection() {
-        const startTime = Date.now();
-        
-        try {
-            const result = await this.generate(
-                'Você é um assistente. Responda de forma curta.',
-                'Diga apenas: Olá, estou funcionando!'
-            );
-            
-            return {
-                success: true,
-                latency: Date.now() - startTime,
-                response: result.text,
-                raw: result.raw,
-                parsed: result.parsed,
-                model: this.model
-            };
-        } catch (e) {
-            return {
-                success: false,
-                latency: Date.now() - startTime,
-                error: e.message,
-                model: this.model
-            };
-        }
-    }
+    async listModels() { return []; }
+    setModel(name) { this.model = name; }
 }
 
 module.exports = new GeminiClient();

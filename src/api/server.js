@@ -100,6 +100,9 @@ class BotAPI {
         }
         if (endpoint === 'leads' && method === 'GET') return this.getLeads(res, query);
         if (endpoint === 'conversations' && method === 'GET') return this.getConversations(res, query);
+        if (endpoint === 'crm-stats' && method === 'GET') return this.getCRMStats(res);
+        if (endpoint === 'migrate-schema' && method === 'POST') return this.migrateSchema(res);
+
             if (endpoint === 'messages' && parts[1]) {
         const chatId = decodeURIComponent(parts[1]);
         // Se for número, busca por conversation_id, senão por chat_id
@@ -249,8 +252,77 @@ Responda de forma natural e direta.`;
 
     async getConversations(res, query) {
         if (!this.db) return this.sendJSON(res, 200, []);
-        const conversations = await this.db.getConversations(parseInt(query.limit) || 50, parseInt(query.offset) || 0);
+        const conversations = await this.db.query(`
+            SELECT 
+                c.id, c.chat_id, c.chat_type, c.is_bot_active, 
+                c.stage, c.assunto, c.plano,
+                c.last_message_at, c.message_count, c.created_at, c.lead_id,
+                l.name, l.phone, l.email, l.company, l.tags, l.notes
+            FROM conversations c
+            LEFT JOIN leads l ON c.lead_id = l.id
+            ORDER BY c.last_message_at DESC
+            LIMIT ? OFFSET ?
+        `, [parseInt(query.limit) || 50, parseInt(query.offset) || 0]);
+        
         this.sendJSON(res, 200, conversations);
+    }
+
+    async getCRMStats(res) {
+        if (!this.db) {
+            return this.sendJSON(res, 200, {
+                leads_total: 0,
+                leads_today: 0,
+                conversas_ativas: 0,
+                pipeline: { inicio: 0, explorando: 0, negociando: 0, fechando: 0 }
+            });
+        }
+
+        try {
+            const today = new Date().toISOString().split('T')[0];
+            
+            const leadsTotal = await this.db.query('SELECT COUNT(*) as count FROM leads');
+            const leadsToday = await this.db.query(
+                'SELECT COUNT(*) as count FROM leads WHERE date(created_at) = ?',
+                [today]
+            );
+            const conversasAtivas = await this.db.query(
+                `SELECT COUNT(*) as count FROM conversations 
+                 WHERE datetime(last_message_at) > datetime('now', '-24 hours')`
+            );
+            const pipeline = await this.db.getPipelineStats();
+
+            this.sendJSON(res, 200, {
+                leads_total: leadsTotal[0]?.count || 0,
+                leads_today: leadsToday[0]?.count || 0,
+                conversas_ativas: conversasAtivas[0]?.count || 0,
+                pipeline
+            });
+        } catch (e) {
+            this.sendJSON(res, 500, { error: e.message });
+        }
+    }
+
+    async migrateSchema(res) {
+        if (!this.db) return this.sendJSON(res, 503, { error: 'Database not available' });
+
+        try {
+            // Adicionar colunas se não existirem
+            await this.db.run(`
+                ALTER TABLE conversations ADD COLUMN stage TEXT DEFAULT 'inicio'
+            `).catch(() => {});
+            
+            await this.db.run(`
+                ALTER TABLE conversations ADD COLUMN assunto TEXT
+            `).catch(() => {});
+            
+            await this.db.run(`
+                ALTER TABLE conversations ADD COLUMN plano TEXT
+            `).catch(() => {});
+
+            this.sendJSON(res, 200, { success: true, message: 'Schema atualizado' });
+        } catch (e) {
+            this.sendJSON(res, 200, { success: true, message: 'Colunas já existem ou erro: ' + e.message });
+        }
     }
 
     async getMessages(res, conversationId) {

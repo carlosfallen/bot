@@ -18,6 +18,9 @@ CREATE TABLE IF NOT EXISTS conversations (
   chat_id TEXT NOT NULL UNIQUE,
   chat_type TEXT DEFAULT 'private',
   is_bot_active INTEGER DEFAULT 1,
+  stage TEXT DEFAULT 'inicio',
+  assunto TEXT,
+  plano TEXT,
   last_message_at TEXT DEFAULT CURRENT_TIMESTAMP,
   message_count INTEGER DEFAULT 0,
   created_at TEXT DEFAULT CURRENT_TIMESTAMP,
@@ -65,6 +68,8 @@ CREATE TABLE IF NOT EXISTS statistics (
   created_at TEXT DEFAULT CURRENT_TIMESTAMP,
   UNIQUE(date)
 );
+
+CREATE INDEX IF NOT EXISTS idx_conversations_stage ON conversations(stage);
 
 CREATE INDEX IF NOT EXISTS idx_leads_phone ON leads(phone);
 CREATE INDEX IF NOT EXISTS idx_leads_created_at ON leads(created_at);
