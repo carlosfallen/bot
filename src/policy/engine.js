@@ -6,7 +6,7 @@ try {
   gemini = require('../llm/gemini.js');
 } catch (e) {
   console.log('⚠️ Gemini não disponível:', e.message);
-  gemini = { isConfigured: () => false, generate: async () => ({ text: '' }) };
+  gemini = { isConfigured: () => false, generate: async () => ({ text: '', actions: [] }) };
 }
 
 class LLMRouter {
@@ -15,24 +15,12 @@ class LLMRouter {
     this.enabled = !!(config.gemini?.enabled && gemini.isConfigured());
   }
 
-  // regra: se tiver policy forte (close/support/schedule/payment), chama LLM
-  shouldForceGemini(runtime) {
-    const policy = runtime?.policy || {};
-    const stage = runtime?.conversation?.stage || '';
-    const intent = policy.intent || 'unknown';
-
-    if (!this.enabled || !gemini.isConfigured()) return false;
-
-    if (['close', 'payment', 'schedule', 'support'].includes(intent)) return true;
-    if (stage === 'fechando') return true;
-    return false;
-  }
-
-  shouldUseGemini(result, state, runtime) {
+  shouldUseGemini(result, state) {
     if (!this.enabled) return false;
     if (!gemini.isConfigured()) return false;
 
-    if (this.shouldForceGemini(runtime)) return true;
+    // full_gemini: sempre Gemini
+    if (config.bot?.mode === 'full_gemini') return true;
 
     const { intent, confidence, action } = result || {};
 
@@ -45,45 +33,22 @@ class LLMRouter {
     return false;
   }
 
-  buildUserPrompt(text, result, runtime) {
-    const policy = runtime?.policy || {};
-    const lead = runtime?.lead || {};
-    const conv = runtime?.conversation || {};
-    const deal = runtime?.deal || {};
+  buildUserPrompt(text, ctx) {
+    const intent = ctx?.policy?.intent || 'sales';
+    const goal = ctx?.policy?.goal || '';
+    const stage = ctx?.conversation?.stage || 'inicio';
 
-    const intent = policy.intent || result?.intent || 'unknown';
-    const confidence = Math.round(((result?.confidence || 0) * 100));
-    const stage = conv.stage || 'inicio';
+    const deal = ctx?.deal || {};
+    const dealLine = `deal(status=${deal.status || 'none'} produto=${deal.produto || 'n/a'} plano=${deal.plano || 'n/a'} valor=${deal.valor || 'n/a'})`;
 
-    const memory = [];
-    if (lead?.name) memory.push(`nome=${lead.name}`);
-    if (lead?.company) memory.push(`empresa=${lead.company}`);
-
-    const dealMini = `deal{status=${deal?.status || '-'},produto=${deal?.produto || '-'},plano=${deal?.plano || '-'},valor=${deal?.valor || '-'}}`;
+    const slots = Array.isArray(ctx?.policy?.slots) ? ctx.policy.slots : null;
+    const slotsLine = slots && slots.length ? `slots sugeridos: ${slots.map(s => s.label).join(' ou ')}` : '';
 
     return [
-      `CONTEXTO: intent=${intent} nlp_conf=${confidence}% stage=${stage} ${dealMini} mem=${memory.join('|') || 'nenhuma'}`,
-      `OBJETIVO: ${policy.goal || 'avançar um passo'}`,
-      `MENSAGEM DO CLIENTE: "${text}"`,
-      `Responda natural e execute o próximo passo.`
-    ].join('\n');
-  }
-
-  normalizeHistory(runtime, state) {
-    // prioridade: history vindo do runtime (D1), senão state.historico
-    const historico = runtime?.history || state?.historico;
-    if (!Array.isArray(historico)) return [];
-
-    return historico.slice(-10).map(h => {
-      // formatos aceitos: {role,text} ou {direction,message_text}
-      const text = h.text || h.message_text || h.message || '';
-      const role =
-        (h.role === 'assistant' || h.role === 'model' || h.isBot || h.direction === 'outgoing')
-          ? 'assistant'
-          : 'user';
-
-      return { role, text };
-    }).filter(x => x.text && String(x.text).trim().length > 0);
+      `Contexto: intent=${intent} stage=${stage} ${dealLine} ${slotsLine}`.trim(),
+      goal ? `Objetivo: ${goal}` : '',
+      `Cliente: "${text}"`
+    ].filter(Boolean).join('\n');
   }
 
   isTooSimilar(userId, newText) {
@@ -114,25 +79,32 @@ class LLMRouter {
     }
   }
 
-  /**
-   * route(text, nlpResult, nlpState, jid, runtimeContext)
-   * runtimeContext = { lead, conversation, deal, policy, history }
-   */
-  async route(text, result, state, userId, runtimeContext = {}) {
+  // route(text, nlpResult, state, chatId, leadContext, ctxRuntime)
+  async route(text, result, state, userId, leadContext = {}, ctx = {}) {
     const method = { used: 'nlp', geminiCalled: false };
 
-    if (!this.shouldUseGemini(result, state, runtimeContext)) {
+    if (!this.shouldUseGemini(result, state)) {
       return { response: result?.response || null, method, crmUpdate: null, actions: [] };
     }
 
     try {
       method.geminiCalled = true;
 
-      const userPrompt = this.buildUserPrompt(text, result, runtimeContext);
-      const history = this.normalizeHistory(runtimeContext, state);
+      const userPrompt = this.buildUserPrompt(text, ctx);
+      const history = Array.isArray(ctx?.history) ? ctx.history.slice(-10) : [];
+
+      const leadForPrompt = {
+        name: leadContext?.name || leadContext?.nome || null,
+        company: leadContext?.company || leadContext?.empresa || null,
+        email: leadContext?.email || null,
+        notes: leadContext?.notes || null,
+        conversation: ctx?.conversation || null,
+        deal: ctx?.deal || null,
+        policy: ctx?.policy || null
+      };
 
       console.log('   🤖 Chamando Gemini...');
-      const geminiResult = await gemini.generate(userPrompt, history, runtimeContext, userId);
+      const geminiResult = await gemini.generate(userPrompt, history, leadForPrompt, userId);
 
       let finalText = geminiResult?.text || '';
       const crmUpdate = geminiResult?.crmUpdate || null;
@@ -142,8 +114,8 @@ class LLMRouter {
 
       if (this.isTooSimilar(userId, finalText)) {
         console.log('   ⚠️ Resposta similar, variando...');
-        const retryPrompt = userPrompt + '\nREGRAS: não repita frase pronta. Seja mais direto e diferente.';
-        const retry = await gemini.generate(retryPrompt, history, runtimeContext, userId);
+        const retryPrompt = userPrompt + '\nRegra: não repita frase pronta. seja mais direto e diferente.';
+        const retry = await gemini.generate(retryPrompt, history, leadForPrompt, userId);
         finalText = retry?.text || finalText;
       }
 
