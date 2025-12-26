@@ -9,6 +9,7 @@ bun.lockb
 # Autenticação WhatsApp
 auth_info/
 *.session
+sessions/
 
 # IDE
 .vscode/
