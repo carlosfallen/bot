@@ -10,7 +10,6 @@
 </head>
 <body>
     <div class="app-layout">
-        <!-- Sidebar Navigation -->
         <aside class="sidebar">
             <div class="brand-header">
                 <div class="brand-logo">
@@ -24,35 +23,23 @@
 
             <nav class="nav-menu">
                 <div class="nav-section-label">Principal</div>
-                <a class="nav-item active" data-page="dashboard">
-                    <span class="nav-icon">📊</span>
-                    Dashboard
-                </a>
-                <a class="nav-item" data-page="conversations">
-                    <span class="nav-icon">💬</span>
-                    Conversas
-                    <span class="nav-badge" id="unread-badge" style="display: none;">0</span>
-                </a>
-                <a class="nav-item" data-page="leads">
-                    <span class="nav-icon">👥</span>
-                    Leads
-                </a>
+                <a class="nav-item active" data-page="dashboard"><span class="nav-icon">📊</span>Dashboard</a>
+                <a class="nav-item" data-page="conversations"><span class="nav-icon">💬</span>Conversas<span class="nav-badge" id="unread-badge" style="display:none">0</span></a>
+                <a class="nav-item" data-page="leads"><span class="nav-icon">👥</span>Leads</a>
+                <a class="nav-item" data-page="deals"><span class="nav-icon">💰</span>Negócios</a>
+                <a class="nav-item" data-page="appointments"><span class="nav-icon">📅</span>Agenda</a>
+
+                <div class="nav-section-label">Controles</div>
+                <a class="nav-item" data-page="filters"><span class="nav-icon">🔒</span>Filtros</a>
+                <a class="nav-item" data-page="quick-replies"><span class="nav-icon">⚡</span>Respostas Rápidas</a>
 
                 <div class="nav-section-label">Ferramentas</div>
-                <a class="nav-item" data-page="test-nlp">
-                    <span class="nav-icon">🧠</span>
-                    Testar NLP
-                </a>
-                <a class="nav-item" data-page="test-gemini">
-                    <span class="nav-icon">✨</span>
-                    Testar Gemini
-                </a>
+                <a class="nav-item" data-page="test-nlp"><span class="nav-icon">🧠</span>Testar NLP</a>
+                <a class="nav-item" data-page="test-gemini"><span class="nav-icon">✨</span>Testar Gemini</a>
 
                 <div class="nav-section-label">Sistema</div>
-                <a class="nav-item" data-page="config">
-                    <span class="nav-icon">⚙️</span>
-                    Configurações
-                </a>
+                <a class="nav-item" data-page="config"><span class="nav-icon">⚙️</span>Configurações</a>
+                <a class="nav-item" data-page="activity"><span class="nav-icon">📋</span>Atividades</a>
             </nav>
 
             <div class="connection-widget">
@@ -66,7 +53,6 @@
             </div>
         </aside>
 
-        <!-- Main Content -->
         <main class="main-content">
             <div class="top-bar">
                 <div class="page-header">
@@ -74,349 +60,251 @@
                     <p id="page-subtitle">Visão geral do seu funil de vendas</p>
                 </div>
                 <div class="top-actions">
-                    <button class="btn btn-secondary" onclick="loadAllData()">
-                        🔄 Atualizar
-                    </button>
+                    <button class="btn btn-secondary" onclick="loadAllData()">🔄 Atualizar</button>
                 </div>
             </div>
 
             <div class="page-container">
-                <!-- Dashboard Page -->
+                <!-- DASHBOARD -->
                 <div id="page-dashboard" class="page active">
                     <div class="sales-metrics-grid">
-                        <div class="metric-card revenue">
-                            <div class="metric-header">
-                                <div class="metric-icon">💰</div>
-                                <span class="metric-trend up" id="revenue-trend">+12%</span>
-                            </div>
-                            <div class="metric-value" id="metric-revenue">R$ 0</div>
-                            <div class="metric-label">Receita do Mês</div>
-                        </div>
-                        <div class="metric-card leads">
-                            <div class="metric-header">
-                                <div class="metric-icon">👥</div>
-                                <span class="metric-trend up">+8%</span>
-                            </div>
-                            <div class="metric-value" id="metric-leads">0</div>
-                            <div class="metric-label">Novos Leads</div>
-                        </div>
-                        <div class="metric-card conversion">
-                            <div class="metric-header">
-                                <div class="metric-icon">📈</div>
-                            </div>
-                            <div class="metric-value" id="metric-conversion">0%</div>
-                            <div class="metric-label">Taxa de Conversão</div>
-                        </div>
-                        <div class="metric-card messages">
-                            <div class="metric-header">
-                                <div class="metric-icon">💬</div>
-                            </div>
-                            <div class="metric-value" id="metric-messages">0</div>
-                            <div class="metric-label">Mensagens Hoje</div>
-                        </div>
+                        <div class="metric-card revenue"><div class="metric-header"><div class="metric-icon">💰</div></div><div class="metric-value" id="metric-revenue">R$ 0</div><div class="metric-label">Receita Pipeline</div></div>
+                        <div class="metric-card leads"><div class="metric-header"><div class="metric-icon">👥</div></div><div class="metric-value" id="metric-leads">0</div><div class="metric-label">Novos Leads Hoje</div></div>
+                        <div class="metric-card conversion"><div class="metric-header"><div class="metric-icon">📈</div></div><div class="metric-value" id="metric-conversion">0%</div><div class="metric-label">Taxa Resposta</div></div>
+                        <div class="metric-card messages"><div class="metric-header"><div class="metric-icon">💬</div></div><div class="metric-value" id="metric-messages">0</div><div class="metric-label">Mensagens Hoje</div></div>
                     </div>
-
                     <div class="dashboard-grid">
                         <div class="widget">
-                            <div class="widget-header">
-                                <span class="widget-title">📊 Pipeline de Vendas</span>
-                            </div>
+                            <div class="widget-header"><span class="widget-title">📊 Pipeline</span></div>
                             <div class="widget-body">
-                                <div class="pipeline-stages">
-                                    <div class="pipeline-stage inicio">
-                                        <div class="stage-count" id="stage-inicio">0</div>
-                                        <div class="stage-label">Início</div>
-                                    </div>
-                                    <div class="pipeline-stage explorando">
-                                        <div class="stage-count" id="stage-explorando">0</div>
-                                        <div class="stage-label">Explorando</div>
-                                    </div>
-                                    <div class="pipeline-stage negociando">
-                                        <div class="stage-count" id="stage-negociando">0</div>
-                                        <div class="stage-label">Negociando</div>
-                                    </div>
-                                    <div class="pipeline-stage fechando">
-                                        <div class="stage-count" id="stage-fechando">0</div>
-                                        <div class="stage-label">Fechando</div>
-                                    </div>
-                                </div>
+                                <div class="pipeline-stages" id="pipeline-stages"></div>
                             </div>
                         </div>
-
                         <div class="widget">
-                            <div class="widget-header">
-                                <span class="widget-title">🔥 Conversas Recentes</span>
-                            </div>
-                            <div class="widget-body" id="recent-conversations">
-                                <div class="empty-state">
-                                    <div class="empty-state-icon">💬</div>
-                                    <p>Nenhuma conversa ainda</p>
-                                </div>
-                            </div>
+                            <div class="widget-header"><span class="widget-title">🔥 Conversas Recentes</span></div>
+                            <div class="widget-body" id="recent-conversations"></div>
                         </div>
+                    </div>
+                    <div class="widget" style="margin-top:20px">
+                        <div class="widget-header"><span class="widget-title">📅 Agenda de Hoje</span></div>
+                        <div class="widget-body" id="today-appointments"></div>
                     </div>
                 </div>
 
-                <!-- Conversations Page -->
+                <!-- CONVERSATIONS -->
                 <div id="page-conversations" class="page">
                     <div class="conversations-layout">
                         <div class="conversations-sidebar">
                             <div class="search-box">
-                                <input type="text" class="search-input" placeholder="Buscar conversas..." id="search-conversations">
+                                <input type="text" class="search-input" placeholder="Buscar..." id="search-conversations" oninput="filterConversations()">
                             </div>
-                            <div class="conversations-list" id="conversations-list">
-                                <div class="empty-state">
-                                    <p>Carregando...</p>
-                                </div>
+                            <div class="filter-tabs" style="padding:8px">
+                                <button class="filter-tab active" data-filter="all" onclick="filterConversationType('all')">Todas</button>
+                                <button class="filter-tab" data-filter="unread" onclick="filterConversationType('unread')">Não lidas</button>
+                                <button class="filter-tab" data-filter="favorite" onclick="filterConversationType('favorite')">Favoritas</button>
                             </div>
+                            <div class="conversations-list" id="conversations-list"></div>
                         </div>
                         <div class="chat-area">
-                            <div class="chat-empty" id="chat-empty">
-                                <div>
-                                    <div class="empty-state-icon">💬</div>
-                                    <p>Selecione uma conversa para visualizar</p>
-                                </div>
-                            </div>
+                            <div class="chat-empty" id="chat-empty"><div><div class="empty-state-icon">💬</div><p>Selecione uma conversa</p></div></div>
                             <div id="chat-container" class="hidden">
                                 <div class="chat-header">
                                     <div class="conv-avatar" id="chat-avatar">?</div>
                                     <div class="chat-contact-info">
                                         <div class="chat-contact-name" id="chat-contact-name">Contato</div>
-                                        <div class="chat-contact-status" id="chat-contact-status">Online</div>
+                                        <div class="chat-contact-status" id="chat-contact-status"></div>
                                     </div>
-                                    <button class="btn btn-secondary btn-sm" id="toggle-bot-btn">🤖 Bot Ativo</button>
+                                    <div class="chat-actions">
+                                        <button class="btn btn-secondary btn-sm" id="toggle-bot-btn" onclick="toggleBotForChat()">🤖 Bot Ativo</button>
+                                        <button class="btn btn-secondary btn-sm" onclick="toggleFavorite()">⭐</button>
+                                        <button class="btn btn-secondary btn-sm" onclick="blockChat()">🚫</button>
+                                    </div>
                                 </div>
                                 <div class="chat-messages" id="chat-messages"></div>
                                 <div class="chat-input-area">
-                                    <input type="text" class="chat-input" placeholder="Digite uma mensagem..." id="chat-input">
-                                    <button class="btn btn-primary" id="chat-send-btn">Enviar</button>
+                                    <select id="quick-reply-select" onchange="insertQuickReply()" style="width:120px;padding:8px;border-radius:6px;background:var(--bg-tertiary);border:1px solid var(--border);color:var(--text-primary)">
+                                        <option value="">⚡ Rápidas</option>
+                                    </select>
+                                    <input type="text" class="chat-input" placeholder="Digite..." id="chat-input" onkeypress="if(event.key==='Enter')sendChatMessage()">
+                                    <button class="btn btn-primary" onclick="sendChatMessage()">Enviar</button>
                                 </div>
                             </div>
+                        </div>
+                        <div class="lead-panel" id="lead-panel" style="display:none">
+                            <div class="lead-panel-header"><h3>Detalhes do Lead</h3><button onclick="closeLeadPanel()">✕</button></div>
+                            <div class="lead-panel-body" id="lead-panel-body"></div>
                         </div>
                     </div>
                 </div>
 
-                <!-- Leads Page -->
+                <!-- LEADS -->
                 <div id="page-leads" class="page">
                     <div class="leads-toolbar">
+                        <input type="text" class="search-input" placeholder="Buscar leads..." id="search-leads" oninput="filterLeads()" style="width:300px">
                         <div class="filter-tabs">
-                            <button class="filter-tab active" data-filter="all">Todos</button>
-                            <button class="filter-tab" data-filter="new">Novos</button>
-                            <button class="filter-tab" data-filter="qualified">Qualificados</button>
-                            <button class="filter-tab" data-filter="proposal">Proposta</button>
-                            <button class="filter-tab" data-filter="won">Ganhos</button>
+                            <button class="filter-tab active" data-filter="all" onclick="filterLeadStatus('all')">Todos</button>
+                            <button class="filter-tab" data-filter="new" onclick="filterLeadStatus('new')">Novos</button>
+                            <button class="filter-tab" data-filter="hot" onclick="filterLeadStatus('hot')">Quentes</button>
                         </div>
-                        <div style="flex: 1;"></div>
-                        <button class="btn btn-primary">+ Novo Lead</button>
+                        <div style="flex:1"></div>
+                        <button class="btn btn-primary" onclick="openLeadModal()">+ Novo Lead</button>
                     </div>
                     <div class="leads-table-container">
                         <table class="leads-table">
-                            <thead>
-                                <tr>
-                                    <th>Lead</th>
-                                    <th>Telefone</th>
-                                    <th>Interesse</th>
-                                    <th>Status</th>
-                                    <th>Última Interação</th>
-                                    <th>Ações</th>
-                                </tr>
-                            </thead>
-                            <tbody id="leads-tbody">
-                                <tr>
-                                    <td colspan="6" class="empty-state">Carregando...</td>
-                                </tr>
-                            </tbody>
+                            <thead><tr><th>Lead</th><th>Telefone</th><th>Empresa</th><th>Status</th><th>Temperatura</th><th>Última Interação</th><th>Ações</th></tr></thead>
+                            <tbody id="leads-tbody"></tbody>
                         </table>
                     </div>
                 </div>
 
-                <!-- Test NLP Page -->
+                <!-- DEALS -->
+                <div id="page-deals" class="page">
+                    <div class="deals-toolbar">
+                        <div class="filter-tabs">
+                            <button class="filter-tab active" onclick="filterDeals('all')">Todos</button>
+                            <button class="filter-tab" onclick="filterDeals('open')">Abertos</button>
+                            <button class="filter-tab" onclick="filterDeals('won')">Ganhos</button>
+                            <button class="filter-tab" onclick="filterDeals('lost')">Perdidos</button>
+                        </div>
+                        <div style="flex:1"></div>
+                        <button class="btn btn-primary" onclick="openDealModal()">+ Novo Negócio</button>
+                    </div>
+                    <div class="deals-grid" id="deals-grid"></div>
+                </div>
+
+                <!-- APPOINTMENTS -->
+                <div id="page-appointments" class="page">
+                    <div class="appointments-toolbar">
+                        <button class="btn btn-primary" onclick="openAppointmentModal()">+ Novo Agendamento</button>
+                    </div>
+                    <div class="appointments-list" id="appointments-list"></div>
+                </div>
+
+                <!-- FILTERS -->
+                <div id="page-filters" class="page">
+                    <div class="filters-layout">
+                        <div class="config-section">
+                            <div class="config-section-header"><h3>🔒 Controle de Grupos</h3></div>
+                            <div class="config-section-body">
+                                <div class="config-row">
+                                    <div class="config-row-info"><h4>Responder em Grupos</h4><p>Bot responde em grupos do WhatsApp</p></div>
+                                    <label class="toggle-switch"><input type="checkbox" id="filter-respond-groups" onchange="saveFilterConfig()"><span class="toggle-slider"></span></label>
+                                </div>
+                                <div class="config-row">
+                                    <div class="config-row-info"><h4>Usar Whitelist de Grupos</h4><p>Só responde em grupos listados abaixo</p></div>
+                                    <label class="toggle-switch"><input type="checkbox" id="filter-whitelist-groups" onchange="saveFilterConfig()"><span class="toggle-slider"></span></label>
+                                </div>
+                                <div id="groups-whitelist" style="margin-top:16px">
+                                    <h4 style="margin-bottom:12px">Grupos Liberados</h4>
+                                    <div class="add-filter-form">
+                                        <input type="text" id="new-group-id" placeholder="ID do grupo (ex: 123456789@g.us)" style="flex:1">
+                                        <input type="text" id="new-group-name" placeholder="Nome (opcional)" style="width:200px">
+                                        <button class="btn btn-success" onclick="addGroupFilter()">Adicionar</button>
+                                    </div>
+                                    <div class="filters-list" id="groups-list"></div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="config-section">
+                            <div class="config-section-header"><h3>🚫 Bloqueio de Números</h3></div>
+                            <div class="config-section-body">
+                                <div class="config-row">
+                                    <div class="config-row-info"><h4>Usar Blacklist de Números</h4><p>Bloqueia números específicos</p></div>
+                                    <label class="toggle-switch"><input type="checkbox" id="filter-blacklist-numbers" onchange="saveFilterConfig()"><span class="toggle-slider"></span></label>
+                                </div>
+                                <div id="numbers-blacklist" style="margin-top:16px">
+                                    <h4 style="margin-bottom:12px">Números Bloqueados</h4>
+                                    <div class="add-filter-form">
+                                        <input type="text" id="new-number" placeholder="Número (ex: 5511999999999)" style="flex:1">
+                                        <input type="text" id="new-number-reason" placeholder="Motivo (opcional)" style="width:200px">
+                                        <button class="btn btn-danger" onclick="addNumberFilter()">Bloquear</button>
+                                    </div>
+                                    <div class="filters-list" id="numbers-list"></div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- QUICK REPLIES -->
+                <div id="page-quick-replies" class="page">
+                    <div class="quick-replies-toolbar">
+                        <button class="btn btn-primary" onclick="openQuickReplyModal()">+ Nova Resposta Rápida</button>
+                    </div>
+                    <div class="quick-replies-grid" id="quick-replies-grid"></div>
+                </div>
+
+                <!-- TEST NLP -->
                 <div id="page-test-nlp" class="page">
                     <div class="test-layout">
                         <div class="test-chat-panel">
-                            <div class="test-chat-header">
-                                <h3>🧠 Simulador de Conversa NLP</h3>
-                            </div>
-                            <div class="test-messages" id="nlp-messages">
-                                <div class="message incoming">
-                                    Olá! Este é o simulador de NLP. Digite mensagens para ver como o bot responde usando apenas o sistema determinístico (sem Gemini).
-                                </div>
-                            </div>
+                            <div class="test-chat-header"><h3>🧠 Simulador NLP</h3></div>
+                            <div class="test-messages" id="nlp-messages"><div class="message incoming">Digite mensagens para testar o NLP.</div></div>
                             <div class="test-input-area">
-                                <input type="text" class="test-input" id="nlp-input" placeholder="Digite uma mensagem para testar..." onkeypress="if(event.key==='Enter')testNLP()">
+                                <input type="text" class="test-input" id="nlp-input" placeholder="Digite..." onkeypress="if(event.key==='Enter')testNLP()">
                                 <button class="btn btn-primary" onclick="testNLP()">Testar</button>
                             </div>
                         </div>
                         <div class="analysis-panel">
-                            <div class="analysis-header">
-                                <h3>📊 Análise da Resposta</h3>
-                            </div>
-                            <div class="analysis-content" id="nlp-analysis">
-                                <div class="empty-state">
-                                    <p>Envie uma mensagem para ver a análise</p>
-                                </div>
-                            </div>
+                            <div class="analysis-header"><h3>📊 Análise</h3></div>
+                            <div class="analysis-content" id="nlp-analysis"><div class="empty-state"><p>Envie uma mensagem</p></div></div>
                         </div>
                     </div>
                 </div>
 
-                <!-- Test Gemini Page -->
+                <!-- TEST GEMINI -->
                 <div id="page-test-gemini" class="page">
                     <div class="gemini-layout">
                         <div class="gemini-config-panel">
                             <div class="config-card">
-                                <div class="config-card-header">🔧 Status do Gemini</div>
+                                <div class="config-card-header">🔧 Status Gemini</div>
                                 <div class="config-card-body">
-                                    <div class="config-grid" id="gemini-status-grid">
-                                        <div class="config-item">
-                                            <div class="config-item-label">Status</div>
-                                            <div class="config-item-value" id="gemini-status">Verificando...</div>
-                                        </div>
-                                        <div class="config-item">
-                                            <div class="config-item-label">Router</div>
-                                            <div class="config-item-value" id="gemini-router">-</div>
-                                        </div>
-                                        <div class="config-item">
-                                            <div class="config-item-label">Modelo</div>
-                                            <div class="config-item-value" id="gemini-model">-</div>
-                                        </div>
-                                        <div class="config-item">
-                                            <div class="config-item-label">API Key</div>
-                                            <div class="config-item-value" id="gemini-apikey">-</div>
-                                        </div>
-                                    </div>
+                                    <div class="config-grid" id="gemini-status-grid"></div>
                                 </div>
                             </div>
-
                             <div class="config-card">
-                                <div class="config-card-header">🎯 Testar Conexão</div>
+                                <div class="config-card-header">🎯 Testar</div>
                                 <div class="config-card-body">
-                                    <select class="model-selector" id="model-selector">
-                                        <option value="">Selecione um modelo...</option>
-                                    </select>
-                                    <button class="btn btn-success" style="width: 100%;" onclick="testGeminiConnection()" id="test-gemini-btn">
-                                        🧪 Testar Conexão
-                                    </button>
+                                    <select class="model-selector" id="model-selector"></select>
+                                    <button class="btn btn-success" style="width:100%" onclick="testGeminiConnection()">🧪 Testar</button>
                                     <div class="test-result-box hidden" id="gemini-test-result"></div>
                                 </div>
                             </div>
-
-                            <div class="config-card">
-                                <div class="config-card-header">📋 Modelos Disponíveis</div>
-                                <div class="config-card-body">
-                                    <button class="btn btn-secondary" style="width: 100%; margin-bottom: 12px;" onclick="loadGeminiModels()">
-                                        🔄 Carregar Lista
-                                    </button>
-                                    <div class="models-list" id="models-list">
-                                        <div class="empty-state" style="padding: 20px;">
-                                            <p>Clique para carregar</p>
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
                         </div>
-
                         <div class="gemini-chat-panel">
-                            <div class="gemini-chat-header">
-                                <h3>✨ Chat com Gemini</h3>
-                                <p>Teste como o Gemini responde como um vendedor da agência</p>
-                            </div>
-                            <div class="gemini-messages" id="gemini-messages">
-                                <div class="gemini-msg bot">
-                                    Olá! Sou o assistente da Império Lord. Como posso ajudar?
-                                </div>
-                            </div>
+                            <div class="gemini-chat-header"><h3>✨ Chat Gemini</h3></div>
+                            <div class="gemini-messages" id="gemini-messages"><div class="gemini-msg bot">Olá! Sou o assistente.</div></div>
                             <div class="gemini-input-area">
-                                <input type="text" class="gemini-input" id="gemini-input" placeholder="Digite como se fosse um cliente..." onkeypress="if(event.key==='Enter')sendGeminiMessage()">
-                                <button class="btn btn-primary" onclick="sendGeminiMessage()" id="gemini-send-btn">Enviar</button>
+                                <input type="text" class="gemini-input" id="gemini-input" placeholder="Digite..." onkeypress="if(event.key==='Enter')sendGeminiMessage()">
+                                <button class="btn btn-primary" onclick="sendGeminiMessage()">Enviar</button>
                             </div>
                         </div>
                     </div>
                 </div>
 
-                <!-- Config Page -->
+                <!-- CONFIG -->
                 <div id="page-config" class="page">
-                    <div class="config-layout">
-                        <div class="config-section">
-                            <div class="config-section-header">
-                                <h3>⚙️ Configurações Gerais</h3>
-                            </div>
-                            <div class="config-section-body">
-                                <div class="config-row">
-                                    <div class="config-row-info">
-                                        <h4>Bot Ativo Globalmente</h4>
-                                        <p>Ativa ou desativa todas as respostas automáticas</p>
-                                    </div>
-                                    <label class="toggle-switch">
-                                        <input type="checkbox" id="config-bot-enabled">
-                                        <span class="toggle-slider"></span>
-                                    </label>
-                                </div>
-                                <div class="config-row">
-                                    <div class="config-row-info">
-                                        <h4>Salvar Leads Automaticamente</h4>
-                                        <p>Salva novos contatos como leads no sistema</p>
-                                    </div>
-                                    <label class="toggle-switch">
-                                        <input type="checkbox" id="config-auto-save-leads">
-                                        <span class="toggle-slider"></span>
-                                    </label>
-                                </div>
-                            </div>
-                        </div>
+                    <div class="config-layout" id="config-sections"></div>
+                    <button class="btn btn-primary" onclick="saveAllConfig()" style="margin-top:16px">💾 Salvar Tudo</button>
+                </div>
 
-                        <div class="config-section">
-                            <div class="config-section-header">
-                                <h3>💬 Onde o Bot Responde</h3>
-                            </div>
-                            <div class="config-section-body">
-                                <div class="config-row">
-                                    <div class="config-row-info">
-                                        <h4>Responder em Grupos</h4>
-                                        <p>Bot responde em conversas de grupo</p>
-                                    </div>
-                                    <label class="toggle-switch">
-                                        <input type="checkbox" id="config-respond-groups">
-                                        <span class="toggle-slider"></span>
-                                    </label>
-                                </div>
-                                <div class="config-row">
-                                    <div class="config-row-info">
-                                        <h4>Usar Gemini (IA)</h4>
-                                        <p>Usa inteligência artificial para respostas mais naturais</p>
-                                    </div>
-                                    <label class="toggle-switch">
-                                        <input type="checkbox" id="config-gemini-enabled" checked>
-                                        <span class="toggle-slider"></span>
-                                    </label>
-                                </div>
-                            </div>
-                        </div>
-
-                        <div class="config-section">
-                            <div class="config-section-header">
-                                <h3>📝 Mensagens Automáticas</h3>
-                            </div>
-                            <div class="config-section-body">
-                                <div style="margin-bottom: 16px;">
-                                    <label style="font-size: 13px; font-weight: 500;">Mensagem de Boas-vindas</label>
-                                    <textarea class="config-textarea" id="config-welcome-message" placeholder="Olá! Bem-vindo..."></textarea>
-                                </div>
-                                <div>
-                                    <label style="font-size: 13px; font-weight: 500;">Mensagem Fora do Horário</label>
-                                    <textarea class="config-textarea" id="config-away-message" placeholder="No momento estamos fora do horário..."></textarea>
-                                </div>
-                            </div>
-                        </div>
-
-                        <button class="btn btn-primary" onclick="saveConfig()" style="margin-top: 8px;">
-                            💾 Salvar Configurações
-                        </button>
-                    </div>
+                <!-- ACTIVITY -->
+                <div id="page-activity" class="page">
+                    <div class="activity-list" id="activity-list"></div>
                 </div>
             </div>
         </main>
     </div>
-<script src="/js/app.js"></script>
+
+    <!-- MODALS -->
+    <div class="modal-overlay" id="modal-overlay" onclick="closeModal()"></div>
+    <div class="modal" id="modal">
+        <div class="modal-header"><h3 id="modal-title">Modal</h3><button onclick="closeModal()">✕</button></div>
+        <div class="modal-body" id="modal-body"></div>
+        <div class="modal-footer" id="modal-footer"></div>
+    </div>
+
+    <script src="/js/app.js"></script>
 </body>
 </html>
