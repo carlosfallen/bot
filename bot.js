@@ -1,414 +1,576 @@
 // FILE: bot.js
-const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, delay, makeCacheableSignalKeyStore, fetchLatestBaileysVersion } = require('@whiskeysockets/baileys');
+const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, delay, makeCacheableSignalKeyStore, fetchLatestBaileysVersion, downloadMediaMessage } = require('@whiskeysockets/baileys');
 const pino = require('pino');
 const fs = require('fs');
 const path = require('path');
 const qrcode = require('qrcode-terminal');
 
-// ==================== CONFIGURAÇÃO ====================
+require('dotenv').config();
+
+// Imports
+let gemini, db, r2, BotAPI;
+try { gemini = require('./src/llm/gemini.js'); console.log('✅ Gemini loaded'); } catch (e) { console.log('⚠️ Gemini:', e.message); }
+try { 
+  const CloudflareD1 = require('./src/database/d1.js');
+  db = new CloudflareD1({
+    accountId: process.env.CLOUDFLARE_ACCOUNT_ID,
+    databaseId: process.env.CLOUDFLARE_DATABASE_ID,
+    apiToken: process.env.CLOUDFLARE_API_TOKEN
+  });
+  console.log('✅ Database loaded');
+} catch (e) { console.log('⚠️ Database:', e.message); }
+try { r2 = require('./src/storage/r2.js'); } catch (e) { console.log('⚠️ R2:', e.message); }
+try { BotAPI = require('./src/api/server.js'); } catch (e) { console.log('⚠️ API:', e.message); }
+
+// Config
 const SESSION_DIR = './sessions';
 const logger = pino({ level: 'silent' });
 
-// Estado global
+// Imagens de exemplo (URLs ou paths)
+const EXAMPLE_IMAGES = {
+  site: 'https://pub-a440f87c823745bc855a21afc18c3f49.r2.dev/examples/site-exemplo.jpg',
+  ecommerce: 'https://pub-a440f87c823745bc855a21afc18c3f49.r2.dev/examples/loja-exemplo.jpg',
+  landing: 'https://pub-a440f87c823745bc855a21afc18c3f49.r2.dev/examples/landing-exemplo.jpg',
+  trafego: 'https://pub-a440f87c823745bc855a21afc18c3f49.r2.dev/examples/trafego-exemplo.jpg'
+};
+
 let sock = null;
 let isConnecting = false;
 let reconnectAttempts = 0;
-const MAX_RECONNECT_ATTEMPTS = 10;
-const RECONNECT_INTERVAL = 5000;
+const MAX_RECONNECT = 10;
 
-// Configurações do bot (cache local)
-let botConfig = {
-    bot_enabled: true,
-    respond_to_groups: false,
-    respond_to_channels: false,
-    use_whitelist_groups: false,
-    use_blacklist_numbers: false,
-    auto_save_leads: true,
-    typing_simulation: true,
-    typing_speed: 50,
-    min_response_delay: 1000,
-    max_response_delay: 3000,
-    gemini_enabled: false,
-    gemini_api_key: '',
-    gemini_model: 'gemini-1.5-flash',
-    business_hours_only: false,
-    business_hours_start: '08:00',
-    business_hours_end: '18:00',
-    bot_only_business: false
+const botConfig = {
+  bot_enabled: true,
+  respond_to_groups: false,
+  respond_to_channels: false,
+  typing_simulation: true,
+  typing_speed: 40,
+  min_response_delay: 800,
+  max_response_delay: 2500,
+  auto_save_leads: true,
+  send_audio_responses: true,
+  audio_chance: 0.15,
+  audio_min_interval: 5,
+  send_example_images: true
 };
 
-// ==================== INICIALIZAÇÃO ====================
+// ==================== START ====================
 async function startBot() {
-    if (isConnecting) {
-        console.log('⏳ Já está conectando...');
-        return;
+  if (isConnecting) return;
+  isConnecting = true;
+
+  console.log('\n📱 Iniciando bot...');
+
+  try {
+    if (!fs.existsSync(SESSION_DIR)) {
+      fs.mkdirSync(SESSION_DIR, { recursive: true });
     }
 
-    isConnecting = true;
-    console.log('\n📱 Iniciando bot...');
+    if (db) await db.ensureReady().catch(() => {});
 
-    try {
-        // Garantir pasta de sessão
-        if (!fs.existsSync(SESSION_DIR)) {
-            fs.mkdirSync(SESSION_DIR, { recursive: true });
-        }
+    const { state, saveCreds } = await useMultiFileAuthState(SESSION_DIR);
+    const { version } = await fetchLatestBaileysVersion();
 
-        // Carregar estado de autenticação
-        const { state, saveCreds } = await useMultiFileAuthState(SESSION_DIR);
+    console.log(`📦 Baileys v${version.join('.')}`);
+    if (gemini) console.log(`🤖 Gemini: ${gemini.isConfigured() ? '✅ ' + gemini.getStatus().model : '❌'}`);
+    if (db) console.log(`💾 Database: ${db.isReady() ? '✅' : '❌'}`);
+    if (r2) console.log(`📁 R2 Storage: ${r2.isReady() ? '✅' : '❌'}`);
 
-        // Buscar versão do Baileys
-        const { version } = await fetchLatestBaileysVersion();
-        console.log(`📦 Baileys v${version.join('.')}`);
-
-        // Criar socket
-        sock = makeWASocket({
-            version,
-            auth: {
-                creds: state.creds,
-                keys: makeCacheableSignalKeyStore(state.keys, logger)
-            },
-            logger,
-            browser: ['Império Lord Bot', 'Chrome', '120.0.0'],
-            connectTimeoutMs: 60000,
-            keepAliveIntervalMs: 30000,
-            retryRequestDelayMs: 2000,
-            markOnlineOnConnect: true,
-            syncFullHistory: false,
-            getMessage: async () => ({ conversation: '' })
-        });
-
-        // ==================== EVENTOS ====================
-        
-        // Atualização de conexão
-        sock.ev.on('connection.update', async (update) => {
-            const { connection, lastDisconnect, qr } = update;
-
-            // QR CODE - Exibir manualmente
-            if (qr) {
-                console.log('\n' + '━'.repeat(50));
-                console.log('📱 ESCANEIE O QR CODE ABAIXO:');
-                console.log('━'.repeat(50) + '\n');
-                qrcode.generate(qr, { small: true });
-                console.log('\n' + '━'.repeat(50));
-                console.log('⏳ Aguardando conexão...');
-                console.log('━'.repeat(50) + '\n');
-            }
-
-            if (connection === 'close') {
-                isConnecting = false;
-                const statusCode = lastDisconnect?.error?.output?.statusCode;
-                const reason = DisconnectReason[statusCode] || statusCode;
-                
-                console.log(`\n❌ Desconectado: ${reason} (${statusCode})`);
-
-                if (statusCode === DisconnectReason.loggedOut || statusCode === 401) {
-                    console.log('🗑️ Sessão encerrada. Limpando dados...');
-                    await clearSession();
-                    reconnectAttempts = 0;
-                    setTimeout(startBot, 3000);
-                } else if (statusCode === 500 || statusCode === 515) {
-                    reconnectAttempts++;
-                    if (reconnectAttempts <= MAX_RECONNECT_ATTEMPTS) {
-                        const waitTime = Math.min(reconnectAttempts * RECONNECT_INTERVAL, 60000);
-                        console.log(`🔄 Reconectando em ${waitTime/1000}s... (tentativa ${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})`);
-                        setTimeout(startBot, waitTime);
-                    } else {
-                        console.log('❌ Máximo de tentativas atingido. Limpando sessão...');
-                        await clearSession();
-                        reconnectAttempts = 0;
-                        setTimeout(startBot, 10000);
-                    }
-                } else if (statusCode !== DisconnectReason.loggedOut) {
-                    reconnectAttempts++;
-                    if (reconnectAttempts <= MAX_RECONNECT_ATTEMPTS) {
-                        const waitTime = Math.min(reconnectAttempts * 2000, 30000);
-                        console.log(`🔄 Reconectando em ${waitTime/1000}s...`);
-                        setTimeout(startBot, waitTime);
-                    } else {
-                        console.log('❌ Máximo de tentativas. Aguardando 5 minutos...');
-                        reconnectAttempts = 0;
-                        setTimeout(startBot, 300000);
-                    }
-                }
-            }
-
-            if (connection === 'connecting') {
-                console.log('🔄 Conectando ao WhatsApp...');
-            }
-
-            if (connection === 'open') {
-                isConnecting = false;
-                reconnectAttempts = 0;
-                console.log('\n' + '━'.repeat(50));
-                console.log('✅ CONECTADO AO WHATSAPP!');
-                console.log(`👤 ${sock.user?.name || 'Bot'}`);
-                console.log(`📞 ${sock.user?.id?.split(':')[0] || ''}`);
-                console.log('━'.repeat(50) + '\n');
-
-                await loadBotConfig();
-            }
-        });
-
-        // Salvar credenciais
-        sock.ev.on('creds.update', saveCreds);
-
-        // ==================== MENSAGENS ====================
-        sock.ev.on('messages.upsert', async ({ messages, type }) => {
-            if (type !== 'notify') return;
-
-            for (const msg of messages) {
-                try {
-                    await handleMessage(msg);
-                } catch (err) {
-                    console.error('❌ Erro ao processar mensagem:', err.message);
-                }
-            }
-        });
-
-    } catch (err) {
-        console.error('❌ Erro ao iniciar:', err.message);
-        isConnecting = false;
-        
-        if (err.message?.includes('Unexpected end of JSON')) {
-            console.log('🗑️ Sessão corrompida. Limpando...');
-            await clearSession();
-        }
-        
-        setTimeout(startBot, 5000);
-    }
-}
-
-// ==================== LIMPAR SESSÃO ====================
-async function clearSession() {
-    try {
-        if (fs.existsSync(SESSION_DIR)) {
-            const files = fs.readdirSync(SESSION_DIR);
-            for (const file of files) {
-                fs.unlinkSync(path.join(SESSION_DIR, file));
-            }
-            console.log('✅ Sessão limpa');
-        }
-    } catch (err) {
-        console.error('Erro ao limpar sessão:', err.message);
-    }
-}
-
-// ==================== CARREGAR CONFIG ====================
-async function loadBotConfig() {
-    try {
-        const res = await fetch('http://localhost:3512/api/config');
-        if (res.ok) {
-            const data = await res.json();
-            for (const [key, cfg] of Object.entries(data)) {
-                if (botConfig.hasOwnProperty(key)) {
-                    botConfig[key] = cfg.value;
-                }
-            }
-            console.log('✅ Configurações carregadas do banco');
-        }
-    } catch (err) {
-        console.log('⚠️ Usando configurações padrão');
-    }
-}
-
-// ==================== PROCESSAR MENSAGEM ====================
-async function handleMessage(msg) {
-    if (msg.key.fromMe) return;
-    if (msg.key.remoteJid === 'status@broadcast') return;
-
-    const chatId = msg.key.remoteJid;
-    const isGroup = chatId.endsWith('@g.us');
-    const isChannel = chatId.endsWith('@newsletter');
-    const sender = msg.key.participant || chatId;
-    const pushName = msg.pushName || '';
-
-    const text = msg.message?.conversation ||
-                 msg.message?.extendedTextMessage?.text ||
-                 msg.message?.imageMessage?.caption ||
-                 msg.message?.videoMessage?.caption ||
-                 msg.message?.documentMessage?.caption ||
-                 '';
-
-    if (!text) return;
-
-    const chatType = isGroup ? '👥' : isChannel ? '📢' : '👤';
-    console.log(`\n${chatType} [${new Date().toLocaleTimeString()}] ${pushName || sender.split('@')[0]}`);
-    console.log(`   💬 ${text.substring(0, 100)}${text.length > 100 ? '...' : ''}`);
-
-    if (!await shouldProcess(chatId, isGroup, isChannel, sender, text)) {
-        console.log('   ⏭️ Ignorado (filtros)');
-        return;
-    }
-
-    if (!botConfig.bot_enabled) {
-        console.log('   ⏭️ Bot desativado');
-        return;
-    }
-
-    try {
-        await sock.readMessages([msg.key]);
-
-        if (botConfig.typing_simulation) {
-            await sock.sendPresenceUpdate('composing', chatId);
-            const typingTime = Math.min(text.length * botConfig.typing_speed, 5000);
-            await delay(Math.max(typingTime, botConfig.min_response_delay));
-        }
-
-        const response = await generateResponse(text, { chatId, sender, pushName, isGroup });
-
-        if (response) {
-            await sock.sendMessage(chatId, { text: response });
-            console.log(`   ✅ Respondido: ${response.substring(0, 50)}...`);
-        }
-
-    } catch (err) {
-        console.error(`   ❌ Erro: ${err.message}`);
-    }
-}
-
-// ==================== VERIFICAR SE DEVE PROCESSAR ====================
-async function shouldProcess(chatId, isGroup, isChannel, sender, text) {
-    if (isChannel && !botConfig.respond_to_channels) return false;
-
-    if (isGroup) {
-        if (!botConfig.respond_to_groups) return false;
-
-        if (botConfig.use_whitelist_groups) {
-            try {
-                const res = await fetch(`http://localhost:3512/api/filters?chat_id=${encodeURIComponent(chatId)}`);
-                const filters = await res.json();
-                const allowed = filters.find(f => f.chat_id === chatId && f.is_allowed);
-                if (!allowed) return false;
-            } catch {
-                return false;
-            }
-        }
-    }
-
-    if (botConfig.use_blacklist_numbers && !isGroup) {
-        try {
-            const res = await fetch(`http://localhost:3512/api/filters?chat_id=${encodeURIComponent(chatId)}`);
-            const filters = await res.json();
-            const blocked = filters.find(f => f.chat_id === chatId && !f.is_allowed);
-            if (blocked) return false;
-        } catch {}
-    }
-
-    if (botConfig.business_hours_only) {
-        const now = new Date();
-        const hour = now.getHours();
-        const minute = now.getMinutes();
-        const current = hour * 60 + minute;
-
-        const [startH, startM] = botConfig.business_hours_start.split(':').map(Number);
-        const [endH, endM] = botConfig.business_hours_end.split(':').map(Number);
-        const start = startH * 60 + startM;
-        const end = endH * 60 + endM;
-
-        if (current < start || current > end) return false;
-    }
-
-    return true;
-}
-
-// ==================== GERAR RESPOSTA ====================
-async function generateResponse(text, context) {
-    const lowerText = text.toLowerCase().trim();
-
-    if (/^(oi|olá|ola|hey|eai|e ai|bom dia|boa tarde|boa noite|hello|hi)\b/i.test(lowerText)) {
-        const greetings = [
-            `Olá${context.pushName ? ', ' + context.pushName : ''}! 👋 Seja bem-vindo(a) à Império Lord!`,
-            `Oi${context.pushName ? ', ' + context.pushName : ''}! 😊 Como posso ajudar?`,
-            `Olá! Tudo bem? Sou o assistente da Império Lord. Em que posso ajudar?`
-        ];
-        return greetings[Math.floor(Math.random() * greetings.length)];
-    }
-
-    if (/pre[cç]o|valor|quanto custa|tabela|pacote/i.test(lowerText)) {
-        return `💰 *Nossos Pacotes:*
-
-🥉 *Essencial* - R$ 543/mês
-   Landing page + Setup básico
-
-🥈 *Profissional* - R$ 1.043/mês
-   Site completo + Integração IA
-
-🥇 *Premium* - R$ 2.543/mês
-   E-commerce + CRM + Automação
-
-Qual pacote te interessa? 😊`;
-    }
-
-    if (/servi[cç]o|faz|trabalh|oferece/i.test(lowerText)) {
-        return `🚀 *Nossos Serviços:*
-
-- Sites e Landing Pages
-- E-commerce completo
-- Gestão de Tráfego Pago
-- Automação com IA
-- CRM e Chatbots
-- Marketing Digital
-
-Quer saber mais sobre algum? 😊`;
-    }
-
-    if (/humano|atendente|pessoa|falar com|suporte/i.test(lowerText)) {
-        return `👨‍💼 Entendi! Vou chamar um atendente para você.
-
-Enquanto isso, pode me contar mais sobre o que precisa?
-
-Um membro da equipe irá te responder em breve! 🙏`;
-    }
-
-    if (/obrigad|valeu|thanks|vlw/i.test(lowerText)) {
-        return `De nada! 😊 Estou aqui se precisar de mais alguma coisa!`;
-    }
-
-    if (botConfig.gemini_enabled && botConfig.gemini_api_key) {
-        try {
-            return await callGemini(text, context);
-        } catch (err) {
-            console.error('Erro Gemini:', err.message);
-        }
-    }
-
-    return `Recebi sua mensagem! 😊
-
-Para melhor atendê-lo, você poderia me dizer:
-
-1️⃣ Quer conhecer nossos *serviços*?
-2️⃣ Quer ver nossa *tabela de preços*?
-3️⃣ Precisa falar com um *atendente*?
-
-Digite o número ou escreva sua dúvida!`;
-}
-
-// ==================== CHAMAR GEMINI ====================
-async function callGemini(text, context) {
-    const systemPrompt = `Você é o assistente virtual da Império Lord, uma agência de marketing digital.
-Seja simpático, profissional e objetivo. Use emojis moderadamente.
-Serviços: Sites, Landing Pages, E-commerce, Tráfego Pago, Automação IA, CRM.
-Preços: Essencial R$543, Profissional R$1.043, Premium R$2.543.`;
-
-    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${botConfig.gemini_model}:generateContent?key=${botConfig.gemini_api_key}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-            contents: [{ parts: [{ text: `${systemPrompt}\n\nCliente: ${text}` }] }],
-            generationConfig: { temperature: 0.7, maxOutputTokens: 500 }
-        })
+    sock = makeWASocket({
+      version,
+      auth: { creds: state.creds, keys: makeCacheableSignalKeyStore(state.keys, logger) },
+      logger,
+      browser: ['Império Lord Bot', 'Chrome', '120.0.0'],
+      connectTimeoutMs: 60000,
+      keepAliveIntervalMs: 30000,
+      markOnlineOnConnect: true,
+      syncFullHistory: false,
+      getMessage: async () => ({ conversation: '' })
     });
 
-    const data = await res.json();
-    return data.candidates?.[0]?.content?.parts?.[0]?.text || null;
+    sock.ev.on('connection.update', async (update) => {
+      const { connection, lastDisconnect, qr } = update;
+
+      if (qr) {
+        console.log('\n' + '━'.repeat(50));
+        console.log('📱 ESCANEIE O QR CODE:');
+        console.log('━'.repeat(50) + '\n');
+        qrcode.generate(qr, { small: true });
+      }
+
+      if (connection === 'close') {
+        isConnecting = false;
+        const code = lastDisconnect?.error?.output?.statusCode;
+        console.log(`\n❌ Desconectado: ${code}`);
+
+        if (code === DisconnectReason.loggedOut || code === 401) {
+          await clearSession();
+          reconnectAttempts = 0;
+          setTimeout(startBot, 3000);
+        } else if (reconnectAttempts++ < MAX_RECONNECT) {
+          const wait = Math.min(reconnectAttempts * 5000, 60000);
+          console.log(`🔄 Reconectando em ${wait / 1000}s...`);
+          setTimeout(startBot, wait);
+        } else {
+          await clearSession();
+          reconnectAttempts = 0;
+          setTimeout(startBot, 10000);
+        }
+      }
+
+      if (connection === 'connecting') console.log('🔄 Conectando...');
+
+      if (connection === 'open') {
+        isConnecting = false;
+        reconnectAttempts = 0;
+        console.log('\n' + '━'.repeat(50));
+        console.log('✅ CONECTADO!');
+        console.log(`👤 ${sock.user?.name || 'Bot'}`);
+        console.log(`📞 ${sock.user?.id?.split(':')[0] || ''}`);
+        console.log('━'.repeat(50) + '\n');
+        
+        await loadConfig();
+        
+        if (BotAPI && db) {
+          const api = new BotAPI(db, { getSocket: () => sock });
+          api.start();
+        }
+      }
+    });
+
+    sock.ev.on('creds.update', saveCreds);
+
+    sock.ev.on('messages.upsert', async ({ messages, type }) => {
+      if (type !== 'notify') return;
+      for (const msg of messages) {
+        try {
+          await handleMessage(msg);
+        } catch (err) {
+          console.error('❌ Erro:', err.message);
+        }
+      }
+    });
+
+  } catch (err) {
+    console.error('❌ Erro ao iniciar:', err.message);
+    isConnecting = false;
+    setTimeout(startBot, 5000);
+  }
 }
 
-// ==================== EXPORTAR ====================
-module.exports = { sock: () => sock, startBot };
+async function clearSession() {
+  try {
+    if (fs.existsSync(SESSION_DIR)) {
+      fs.readdirSync(SESSION_DIR).forEach(f => fs.unlinkSync(path.join(SESSION_DIR, f)));
+      console.log('✅ Sessão limpa');
+    }
+  } catch (e) { console.error('Erro limpando sessão:', e.message); }
+}
 
-// ==================== INICIAR ====================
+async function loadConfig() {
+  try {
+    const res = await fetch(`http://localhost:${process.env.PORT || 3512}/api/config`);
+    if (res.ok) {
+      const data = await res.json();
+      for (const [key, cfg] of Object.entries(data)) {
+        if (botConfig.hasOwnProperty(key)) botConfig[key] = cfg.value;
+      }
+      console.log('✅ Configurações carregadas');
+    }
+  } catch {
+    if (db?.isReady()) {
+      try {
+        const configs = await db.getAllConfig();
+        for (const [key, cfg] of Object.entries(configs)) {
+          if (botConfig.hasOwnProperty(key)) botConfig[key] = cfg.value;
+        }
+        console.log('✅ Configurações do DB');
+      } catch {}
+    }
+  }
+}
+
+// ==================== HANDLE MESSAGE ====================
+async function handleMessage(msg) {
+  if (msg.key.fromMe) return;
+  if (msg.key.remoteJid === 'status@broadcast') return;
+
+  const chatId = msg.key.remoteJid;
+  const isGroup = chatId.endsWith('@g.us');
+  const isChannel = chatId.endsWith('@newsletter');
+  const pushName = msg.pushName || '';
+  const phone = chatId.split('@')[0];
+
+  const msgData = await parseMessage(msg);
+  if (!msgData) return;
+
+  const icon = isGroup ? '👥' : isChannel ? '📢' : '👤';
+  console.log(`\n${icon} [${new Date().toLocaleTimeString()}] ${pushName || phone}`);
+  console.log(`   📨 ${msgData.type}: ${(msgData.text || msgData.caption || '').substring(0, 60)}...`);
+
+  if (isChannel && !botConfig.respond_to_channels) return;
+  if (isGroup && !botConfig.respond_to_groups) return;
+  if (!botConfig.bot_enabled) { console.log('   ⏭️ Bot desativado'); return; }
+
+  try {
+    let conversation = null;
+    let lead = null;
+
+    if (db?.isReady()) {
+      if (!isGroup && botConfig.auto_save_leads) {
+        lead = await db.getLeadByPhone(phone);
+        if (!lead) {
+          await db.saveLead({ phone, name: pushName, source: 'whatsapp' });
+          lead = await db.getLeadByPhone(phone);
+        }
+      }
+
+      conversation = await db.getOrCreateConversation(
+        chatId,
+        lead?.id || null,
+        isGroup ? 'group' : 'private',
+        pushName || null
+      );
+
+      await db.saveMessage(conversation.id, {
+        messageId: msg.key.id,
+        direction: 'incoming',
+        text: msgData.text || msgData.caption || `[${msgData.type}]`,
+        type: msgData.type,
+        mediaUrl: msgData.mediaUrl,
+        isBot: false
+      });
+    }
+
+    await sock.readMessages([msg.key]);
+
+    let responses = [];
+    let shouldSendAudio = false;
+    let exampleImage = null;
+    
+    if (gemini?.isConfigured()) {
+      console.log(`   🤖 Processando ${msgData.type}...`);
+      
+      const options = {
+        mediaType: msgData.type !== 'text' ? msgData.type : null,
+        mediaData: msgData.mediaBuffer,
+        mediaUrl: msgData.mediaUrl,
+        mimetype: msgData.mimetype,
+        transcription: msgData.transcription,
+        contactInfo: msgData.contactInfo,
+        locationInfo: msgData.locationInfo,
+        pollInfo: msgData.pollInfo
+      };
+
+      responses = await gemini.generate(
+        msgData.text || msgData.caption || '',
+        chatId,
+        pushName,
+        options
+      );
+
+      // Verificar se deve enviar áudio
+      if (botConfig.send_audio_responses && gemini.shouldSendAudio(chatId)) {
+        shouldSendAudio = true;
+      }
+
+      // Verificar se deve enviar imagem de exemplo
+      const text = (msgData.text || msgData.caption || '').toLowerCase();
+      if (botConfig.send_example_images) {
+        if (/exemplo|mostra|ver|como.*(fica|é)/.test(text)) {
+          if (/loja|ecommerce|e-commerce/.test(text)) exampleImage = 'ecommerce';
+          else if (/landing/.test(text)) exampleImage = 'landing';
+          else if (/site/.test(text)) exampleImage = 'site';
+          else if (/tráfego|trafego|ads/.test(text)) exampleImage = 'trafego';
+        }
+      }
+
+    } else {
+      responses = [generateFallback(msgData.text || msgData.caption || '', pushName)];
+    }
+
+    // Enviar respostas
+    for (let i = 0; i < responses.length; i++) {
+      const response = responses[i];
+      
+      if (botConfig.typing_simulation) {
+        await sock.sendPresenceUpdate('composing', chatId);
+        const typingTime = Math.min(response.length * botConfig.typing_speed, botConfig.max_response_delay);
+        await delay(Math.max(typingTime, botConfig.min_response_delay));
+      }
+
+      // Decidir se envia como texto ou áudio
+      if (shouldSendAudio && i === responses.length - 1) {
+        const audio = await gemini.generateAudio(response);
+        if (audio) {
+          await sock.sendMessage(chatId, {
+            audio: audio.buffer,
+            mimetype: audio.mimetype,
+            ptt: true
+          });
+          console.log(`   🔊 Áudio enviado (${audio.buffer.length} bytes)`);
+          gemini.markAudioSent(chatId);
+        } else {
+          await sock.sendMessage(chatId, { text: response });
+          console.log(`   ✅ ${response.substring(0, 50)}...`);
+        }
+      } else {
+        await sock.sendMessage(chatId, { text: response });
+        console.log(`   ✅ ${response.substring(0, 50)}...`);
+      }
+
+      if (db?.isReady() && conversation) {
+        await db.saveMessage(conversation.id, {
+          direction: 'outgoing',
+          text: response,
+          type: shouldSendAudio ? 'audio' : 'text',
+          isBot: true
+        });
+      }
+
+      if (i < responses.length - 1) {
+        await delay(500 + Math.random() * 1000);
+      }
+    }
+
+    // Enviar imagem de exemplo se detectado
+    if (exampleImage && EXAMPLE_IMAGES[exampleImage]) {
+      await delay(1000);
+      await sock.sendPresenceUpdate('composing', chatId);
+      await delay(500);
+      
+      try {
+        const imageUrl = EXAMPLE_IMAGES[exampleImage];
+        
+        // Se for URL, baixar primeiro
+        if (imageUrl.startsWith('http')) {
+          const imgRes = await fetch(imageUrl);
+          if (imgRes.ok) {
+            const imgBuffer = Buffer.from(await imgRes.arrayBuffer());
+            await sock.sendMessage(chatId, {
+              image: imgBuffer,
+              caption: `👆 Exemplo de ${exampleImage === 'ecommerce' ? 'loja virtual' : exampleImage}`
+            });
+            console.log(`   🖼️ Exemplo enviado: ${exampleImage}`);
+          }
+        }
+      } catch (e) {
+        console.log(`   ⚠️ Erro enviando exemplo: ${e.message}`);
+      }
+    }
+
+    // Gerar imagem sob demanda
+    const userText = (msgData.text || msgData.caption || '').toLowerCase();
+    if (/gerar? imagem|criar? imagem|faz (uma |um )?imagem/.test(userText)) {
+      const prompt = userText.replace(/gerar? imagem|criar? imagem|faz (uma |um )?imagem/i, '').trim();
+      if (prompt.length > 5) {
+        await delay(1000);
+        await sock.sendPresenceUpdate('composing', chatId);
+        await sock.sendMessage(chatId, { text: 'deixa eu criar essa imagem pra vc...' });
+        
+        const generated = await gemini.generateImageWithFlash(prompt);
+        if (generated) {
+          await sock.sendMessage(chatId, {
+            image: generated.buffer,
+            caption: '🎨 pronto!'
+          });
+          console.log(`   🎨 Imagem gerada`);
+        } else {
+          await sock.sendMessage(chatId, { text: 'ops, não consegui gerar essa imagem agora...' });
+        }
+      }
+    }
+
+  } catch (err) {
+    console.error(`   ❌ ${err.message}`);
+    try {
+      await sock.sendMessage(chatId, { text: 'opa, deu um probleminha... pode repetir?' });
+    } catch {}
+  }
+}
+
+// ==================== PARSE MESSAGE ====================
+async function parseMessage(msg) {
+  const m = msg.message;
+  if (!m) return null;
+
+  if (m.conversation) return { type: 'text', text: m.conversation };
+  if (m.extendedTextMessage) return { type: 'text', text: m.extendedTextMessage.text };
+
+  if (m.imageMessage) {
+    const data = await downloadAndUpload(msg, 'image');
+    return {
+      type: 'image',
+      caption: m.imageMessage.caption || '',
+      mimetype: m.imageMessage.mimetype,
+      mediaBuffer: data?.buffer,
+      mediaUrl: data?.url
+    };
+  }
+
+  if (m.videoMessage) {
+    const data = await downloadAndUpload(msg, 'video');
+    return {
+      type: 'video',
+      caption: m.videoMessage.caption || '',
+      mimetype: m.videoMessage.mimetype,
+      mediaBuffer: data?.buffer,
+      mediaUrl: data?.url
+    };
+  }
+
+  if (m.audioMessage) {
+    const data = await downloadAndUpload(msg, 'audio');
+    let transcription = null;
+    
+    if (data?.buffer && gemini?.isMediaConfigured()) {
+      console.log('   🎤 Transcrevendo áudio...');
+      try {
+        transcription = await gemini.transcribeAudio(data.buffer, m.audioMessage.mimetype || 'audio/ogg');
+        if (transcription) console.log(`   📝 Transcrição: ${transcription.substring(0, 50)}...`);
+      } catch (e) {
+        console.log('   ⚠️ Transcrição falhou:', e.message);
+      }
+    }
+    
+    return {
+      type: 'audio',
+      text: transcription || '',
+      mimetype: m.audioMessage.mimetype,
+      seconds: m.audioMessage.seconds,
+      mediaBuffer: data?.buffer,
+      mediaUrl: data?.url,
+      transcription
+    };
+  }
+
+  if (m.documentMessage) {
+    const data = await downloadAndUpload(msg, 'document');
+    return {
+      type: 'document',
+      text: `[Documento: ${m.documentMessage.fileName || 'arquivo'}]`,
+      filename: m.documentMessage.fileName,
+      mimetype: m.documentMessage.mimetype,
+      mediaUrl: data?.url
+    };
+  }
+
+  if (m.stickerMessage) return { type: 'sticker', text: '[sticker]', mimetype: m.stickerMessage.mimetype };
+
+  if (m.contactMessage) {
+    const vcard = m.contactMessage.vcard || '';
+    const nameMatch = vcard.match(/FN:(.+)/);
+    const telMatch = vcard.match(/TEL[^:]*:(.+)/);
+    return {
+      type: 'contact',
+      text: '[contato]',
+      contactInfo: { name: nameMatch?.[1] || 'Contato', number: telMatch?.[1]?.replace(/\D/g, '') || '' }
+    };
+  }
+
+  if (m.contactsArrayMessage) {
+    const contacts = m.contactsArrayMessage.contacts || [];
+    return {
+      type: 'contact',
+      text: '[contatos]',
+      contactInfo: { name: contacts.map(c => c.displayName).join(', '), number: 'múltiplos' }
+    };
+  }
+
+  if (m.locationMessage) {
+    return {
+      type: 'location',
+      text: '[localização]',
+      locationInfo: {
+        latitude: m.locationMessage.degreesLatitude,
+        longitude: m.locationMessage.degreesLongitude,
+        name: m.locationMessage.name || '',
+        address: m.locationMessage.address || ''
+      }
+    };
+  }
+
+  if (m.liveLocationMessage) {
+    return {
+      type: 'location',
+      text: '[localização ao vivo]',
+      locationInfo: { latitude: m.liveLocationMessage.degreesLatitude, longitude: m.liveLocationMessage.degreesLongitude }
+    };
+  }
+
+  if (m.pollCreationMessage) {
+    return {
+      type: 'poll',
+      text: '[enquete]',
+      pollInfo: { name: m.pollCreationMessage.name, options: m.pollCreationMessage.options?.map(o => o.optionName) || [] }
+    };
+  }
+
+  if (m.pollUpdateMessage) return { type: 'poll', text: '[resposta enquete]' };
+  if (m.reactionMessage) return null;
+  if (m.protocolMessage || m.senderKeyDistributionMessage) return null;
+
+  const msgType = Object.keys(m)[0];
+  console.log(`   ⚠️ Tipo desconhecido: ${msgType}`);
+  return { type: 'unknown', text: `[${msgType}]` };
+}
+
+// ==================== DOWNLOAD & UPLOAD ====================
+async function downloadAndUpload(msg, type) {
+  try {
+    const buffer = await downloadMediaMessage(msg, 'buffer', {});
+    
+    let url = null;
+    let key = null;
+
+    if (r2?.isReady()) {
+      const m = msg.message;
+      const mediaMsg = m.imageMessage || m.videoMessage || m.audioMessage || m.documentMessage;
+      const mimetype = mediaMsg?.mimetype || 'application/octet-stream';
+      const filename = mediaMsg?.fileName || `${type}_${Date.now()}`;
+
+      const result = await r2.upload(buffer, {
+        prefix: `whatsapp/${type}`,
+        filename,
+        contentType: mimetype,
+        metadata: { chatId: msg.key.remoteJid, messageId: msg.key.id }
+      });
+
+      url = result.url;
+      key = result.key;
+      
+      if (url) console.log(`   📤 Uploaded: ${url}`);
+    }
+
+    return { buffer, url, key };
+  } catch (e) {
+    console.error(`   ⚠️ Download/upload: ${e.message}`);
+    return null;
+  }
+}
+
+// ==================== FALLBACK ====================
+function generateFallback(text, pushName) {
+  const t = (text || '').toLowerCase();
+
+  if (/^(oi|olá|ola|hey|eai|bom dia|boa tarde|boa noite)\b/.test(t)) {
+    const g = [`oi${pushName ? ' ' + pushName : ''}!`, `e aí${pushName ? ' ' + pushName : ''}!`, `opa!`];
+    return g[Math.floor(Math.random() * g.length)];
+  }
+
+  if (/pre[cç]o|valor|quanto|tabela/.test(t)) {
+    return `temos 3 pacotes:\n\nEssencial: R$ 543/mês\nProfissional: R$ 1.043/mês\nPremium: R$ 2.543/mês\n\nqual te interessa?`;
+  }
+
+  return `opa! me conta o que vc precisa`;
+}
+
+// ==================== EXPORT ====================
+module.exports = { sock: () => sock, startBot, db };
+
+// ==================== RUN ====================
 console.log('\n' + '═'.repeat(50));
-console.log('   🏰 IMPÉRIO LORD - WhatsApp Bot');
+console.log('   🏰 IMPÉRIO LORD - WhatsApp Bot v2.0');
 console.log('═'.repeat(50));
 
 startBot();

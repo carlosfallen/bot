@@ -1,546 +1,592 @@
 // FILE: src/llm/gemini.js
-const config = require('../config/index.js');
+const path = require('path');
+const { spawn } = require('child_process');
+require('dotenv').config({ path: path.resolve(__dirname, '../../.env') });
 
-function safeText(value) {
-  if (typeof value !== 'string') return null;
-  const t = value.trim();
-  return t.length > 0 ? t : null;
-}
-
-function clamp(n, min, max) {
-  return Math.max(min, Math.min(max, n));
-}
-
-function hashString(str) {
-  let h = 2166136261;
-  for (let i = 0; i < str.length; i++) {
-    h ^= str.charCodeAt(i);
-    h = Math.imul(h, 16777619);
-  }
-  return h >>> 0;
-}
-
-class RateLimiter {
+class ConversationMemory {
   constructor() {
-    this.queue = [];
-    this.activeRequests = 0;
-    this.maxConcurrent = 4;
-    this.minDelay = 850;
+    this.conversations = new Map();
+    this.maxHistory = 15;
   }
 
-  add(fn) {
-    return new Promise((resolve, reject) => {
-      this.queue.push({ fn, resolve, reject });
-      this.process();
-    });
+  get(id) {
+    let conv = this.conversations.get(id);
+    if (!conv) {
+      conv = {
+        id,
+        history: [],
+        context: {
+          name: null,
+          interest: null,
+          business: null,
+          stage: 'inicio',
+          sentPrices: false,
+          messageCount: 0,
+          userStyle: { formal: 0.5 },
+          lastMediaType: null,
+          lastAudioSent: 0,
+          notes: []
+        },
+        lastActivity: Date.now()
+      };
+      this.conversations.set(id, conv);
+    }
+    return conv;
   }
 
-  async process() {
-    if (this.activeRequests >= this.maxConcurrent) return;
-    if (this.queue.length === 0) return;
+  addMessage(id, role, content, mediaType = null) {
+    const conv = this.get(id);
+    conv.history.push({ role, content, mediaType, ts: Date.now() });
+    if (conv.history.length > this.maxHistory) {
+      conv.history = conv.history.slice(-this.maxHistory);
+    }
+    conv.lastActivity = Date.now();
+    conv.context.messageCount++;
+    if (mediaType) conv.context.lastMediaType = mediaType;
+    
+    if (role === 'user') {
+      const t = (content || '').toLowerCase();
+      const ctx = conv.context;
+      ctx.userStyle.formal = /senhor|prezado|poderia|gostaria/i.test(t) ? 0.8 : 
+                             /vc|tb|pq|blz|vlw|kk/i.test(t) ? 0.2 : ctx.userStyle.formal;
+    }
+  }
 
-    const { fn, resolve, reject } = this.queue.shift();
-    this.activeRequests++;
+  addNote(id, note) {
+    const conv = this.get(id);
+    conv.context.notes.push({ text: note, ts: Date.now() });
+    if (conv.context.notes.length > 10) conv.context.notes.shift();
+  }
 
-    try {
-      const result = await fn();
-      await new Promise(r => setTimeout(r, this.minDelay));
-      resolve(result);
-    } catch (e) {
-      reject(e);
-    } finally {
-      this.activeRequests--;
-      this.process();
+  cleanup() {
+    const now = Date.now();
+    for (const [id, conv] of this.conversations) {
+      if (now - conv.lastActivity > 7 * 24 * 60 * 60 * 1000) {
+        this.conversations.delete(id);
+      }
     }
   }
 }
 
-const limiter = new RateLimiter();
+const memory = new ConversationMemory();
+setInterval(() => memory.cleanup(), 60 * 60 * 1000);
+
+// Parse mime type para extrair parâmetros
+function parseMimeType(mimeType) {
+  // audio/L16;codec=pcm;rate=24000
+  const parts = mimeType.split(';');
+  const base = parts[0].trim();
+  const params = {};
+  
+  for (let i = 1; i < parts.length; i++) {
+    const [key, value] = parts[i].trim().split('=');
+    if (key && value) params[key] = value;
+  }
+  
+  return { base, params };
+}
+
+// Converter áudio para OGG Opus (formato WhatsApp)
+async function convertToOpus(inputBuffer, inputMimeType = 'audio/mp3') {
+  return new Promise((resolve, reject) => {
+    const { base, params } = parseMimeType(inputMimeType);
+    
+    // Construir argumentos do FFmpeg baseado no formato de entrada
+    const inputArgs = [];
+    
+    if (base === 'audio/L16' || base === 'audio/pcm' || params.codec === 'pcm') {
+      // PCM raw precisa de parâmetros específicos
+      const rate = params.rate || '24000';
+      inputArgs.push(
+        '-f', 's16le',           // 16-bit signed little-endian PCM
+        '-ar', rate,             // Sample rate
+        '-ac', '1',              // Mono
+        '-i', 'pipe:0'
+      );
+    } else if (base === 'audio/wav' || base === 'audio/wave') {
+      inputArgs.push('-i', 'pipe:0');
+    } else if (base === 'audio/mp3' || base === 'audio/mpeg') {
+      inputArgs.push('-i', 'pipe:0');
+    } else {
+      // Genérico
+      inputArgs.push('-i', 'pipe:0');
+    }
+    
+    const outputArgs = [
+      '-c:a', 'libopus',
+      '-b:a', '64k',
+      '-ar', '48000',
+      '-ac', '1',
+      '-application', 'voip',
+      '-f', 'ogg',
+      'pipe:1'
+    ];
+    
+    const ffmpegArgs = [...inputArgs, ...outputArgs];
+    
+    console.log(`   [FFmpeg] Args: ${ffmpegArgs.join(' ')}`);
+    
+    const ffmpeg = spawn('ffmpeg', ffmpegArgs);
+
+    const chunks = [];
+    let errorData = '';
+
+    ffmpeg.stdout.on('data', chunk => chunks.push(chunk));
+    ffmpeg.stderr.on('data', data => errorData += data.toString());
+    
+    ffmpeg.on('close', code => {
+      if (code === 0 && chunks.length > 0) {
+        resolve(Buffer.concat(chunks));
+      } else {
+        // Log apenas as últimas linhas do erro
+        const errorLines = errorData.split('\n').slice(-5).join('\n');
+        reject(new Error(`FFmpeg code ${code}: ${errorLines}`));
+      }
+    });
+
+    ffmpeg.on('error', err => {
+      reject(new Error(`FFmpeg spawn: ${err.message}`));
+    });
+
+    ffmpeg.stdin.on('error', () => {});
+    ffmpeg.stdin.write(inputBuffer);
+    ffmpeg.stdin.end();
+  });
+}
 
 class GeminiClient {
   constructor() {
-    this.apiKey = config.gemini?.apiKey || process.env.GEMINI_API_KEY;
-    this.model = config.gemini?.model || 'gemini-2.0-flash-exp';
-    this.timeout = config.gemini?.timeout || 20000;
-
-    // 0.55–0.65 costuma soar mais humano do que 0.8 (0.8 tende a “inventar”)
-    this.temperature = typeof config.gemini?.temperature === 'number' ? config.gemini.temperature : 0.62;
-
-    this.maxTokens = config.gemini?.maxTokens || 240;
+    this.textApiKey = process.env.GEMINI_API_KEY || '';
+    this.mediaApiKey = process.env.GEMINI_MEDIA_API_KEY || process.env.GEMINI_API_KEY || '';
+    
+    this.textModel = process.env.GEMINI_MODEL || 'gemma-3-27b-it';
+    this.mediaModel = process.env.GEMINI_MEDIA_MODEL || 'gemini-2.0-flash-lite';
+    this.imageModel = process.env.GEMINI_IMAGE_MODEL || 'gemini-2.0-flash-exp-image-generation';
+    this.ttsModel = process.env.GEMINI_TTS_MODEL || 'gemini-2.5-flash-preview-tts';
+    
     this.baseUrl = 'https://generativelanguage.googleapis.com/v1beta';
-
-    this._lastOpeners = new Map();
-    this._recentStarts = new Map();
-    this._recentEndings = new Map();
-    this._turns = new Map();
-    this._profiles = new Map();
-    this._lastUsedNameTurn = new Map();
+    this.timeout = parseInt(process.env.GEMINI_TIMEOUT_MS) || 45000;
+    this.temperature = parseFloat(process.env.GEMINI_TEMPERATURE) || 0.7;
+    this.maxTokens = parseInt(process.env.GEMINI_MAX_TOKENS) || 200;
+    
+    this.audioChance = parseFloat(process.env.AUDIO_RESPONSE_CHANCE) || 0.15;
+    this.audioMinInterval = parseInt(process.env.AUDIO_MIN_INTERVAL) || 5;
+    
+    this.isGemma = (model) => model.toLowerCase().includes('gemma');
+    
+    console.log(`   [Gemini] Texto: ${this.textModel} (${this.textApiKey ? '✅' : '❌'})`);
+    console.log(`   [Gemini] Mídia: ${this.mediaModel} (${this.mediaApiKey ? '✅' : '❌'})`);
   }
 
   isConfigured() {
-    return !!(this.apiKey && this.apiKey.length > 10);
+    return !!(this.textApiKey && this.textApiKey.length > 10);
+  }
+
+  isMediaConfigured() {
+    return !!(this.mediaApiKey && this.mediaApiKey.length > 10);
   }
 
   getStatus() {
-    return {
-      configured: this.isConfigured(),
-      model: this.model,
-      timeout: this.timeout,
-      temperature: this.temperature,
-      maxTokens: this.maxTokens,
-      active: limiter.activeRequests,
-      queue: limiter.queue.length,
-      apiKeyPreview: this.apiKey ? `${this.apiKey.slice(0, 6)}...` : 'NÃO CONFIGURADA'
+    return { 
+      configured: this.isConfigured(), 
+      mediaConfigured: this.isMediaConfigured(),
+      model: this.textModel,
+      mediaModel: this.mediaModel,
+      imageModel: this.imageModel,
+      ttsModel: this.ttsModel
     };
   }
 
-  setModel(name) {
-    this.model = name;
+  shouldSendAudio(chatId) {
+    const conv = memory.get(chatId);
+    const messagesSinceAudio = conv.context.messageCount - conv.context.lastAudioSent;
+    if (messagesSinceAudio < this.audioMinInterval) return false;
+    return Math.random() < this.audioChance;
   }
 
-  _getProfile(userId = 'unknown') {
-    if (this._profiles.has(userId)) return this._profiles.get(userId);
-
-    const seed = hashString(String(userId));
-    const r = (n) => (seed % n) / n;
-
-    const profile = {
-      informality: clamp(0.45 + r(100) * 0.35, 0.35, 0.78),
-      backchannelChance: clamp(0.18 + r(1000) * 0.18, 0.12, 0.32),
-      softenerChance: clamp(0.12 + r(500) * 0.16, 0.08, 0.28),
-      punctuationLooseness: clamp(0.10 + r(2000) * 0.22, 0.10, 0.30),
-      nameCooldownTurns: 4
-    };
-
-    this._profiles.set(userId, profile);
-    return profile;
+  markAudioSent(chatId) {
+    const conv = memory.get(chatId);
+    conv.context.lastAudioSent = conv.context.messageCount;
   }
 
-  // ==========================================================================
-  // SYSTEM PROMPT (agora com actions + trilhos)
-  // ==========================================================================
-  getSystemPrompt(runtime = {}, userId = 'unknown') {
-    const profile = this._getProfile(userId);
+  _buildPrompt(conv, mediaContext = null) {
+    const ctx = conv.context;
+    const style = ctx.userStyle.formal > 0.6 ? 'formal' : 'informal/casual';
 
-    const lead = runtime.lead || {};
-    const conversation = runtime.conversation || {};
-    const deal = runtime.deal || {};
-    const policy = runtime.policy || {};
+    const info = [];
+    if (ctx.name) info.push(`Cliente: ${ctx.name}`);
+    if (ctx.business) info.push(`Negócio: ${ctx.business}`);
+    if (ctx.interest) info.push(`Interesse: ${ctx.interest}`);
+    if (ctx.sentPrices) info.push(`Já viu preços`);
+    if (ctx.notes?.length) info.push(`Notas: ${ctx.notes.map(n => n.text).join('; ')}`);
 
-    const known = [];
-    if (lead?.name) known.push(`nome: ${lead.name}`);
-    if (lead?.company) known.push(`empresa: ${lead.company}`);
-    if (lead?.email) known.push(`email: ${lead.email}`);
-    if (lead?.notes) known.push(`notas: ${lead.notes}`);
+    let mediaInstructions = '';
+    if (mediaContext) {
+      const mediaTypes = {
+        image: 'O cliente enviou uma IMAGEM. Descreva brevemente o que vê e pergunte como pode ajudar.',
+        audio: 'O cliente enviou um ÁUDIO (transcrito abaixo). Responda naturalmente ao que ele disse.',
+        video: 'O cliente enviou um VÍDEO. Comente brevemente sobre o conteúdo.',
+        document: 'O cliente enviou um DOCUMENTO. Pergunte do que se trata.',
+        sticker: 'O cliente enviou um STICKER. Reaja de forma leve e amigável.',
+        contact: 'O cliente compartilhou um CONTATO. Pergunte se quer que salve ou faça algo.',
+        location: 'O cliente enviou uma LOCALIZAÇÃO. Pergunte se precisa de ajuda com algo.',
+        poll: 'O cliente criou/respondeu uma ENQUETE. Comente naturalmente.'
+      };
+      mediaInstructions = mediaTypes[mediaContext.type] || '';
+    }
 
-    const memoryLine = known.length ? `Dados já conhecidos: ${known.join(' | ')}` : `Dados já conhecidos: nenhum.`;
-    const stageLine = `stage atual: ${conversation.stage || 'inicio'}`;
-    const dealLine = `deal: status=${deal.status || 'none'} produto=${deal.produto || '-'} plano=${deal.plano || '-'} valor=${deal.valor || '-'} pagamento=${deal.pagamento || '-'}`;
-    const intentLine = `intenção detectada: ${policy.intent || 'unknown'}`;
-    const goalLine = `objetivo do turno: ${policy.goal || 'avançar um passo'}`;
+    return `VOCÊ É LORD. Dono da agência Império Lord. NUNCA diga que é IA, modelo ou chatbot.
 
-    const locks = policy.hardRules || {};
-    const maxMsgs = locks.maxMessages || 2;
-    const maxQ = locks.maxQuestionsTotal || 1;
+IDENTIDADE:
+- Nome: Lord
+- Empresa: Império Lord (agência de marketing digital)
+- Você FAZ sites, lojas virtuais, tráfego pago, redes sociais
 
-    // Prompt curto, mas com regras duras
-    return (
-      `Você é o Lord, dono da Império Lord. Você conversa como humano no WhatsApp, sem jeito de robô.\n` +
-      `${memoryLine}\n` +
-      `${stageLine}\n` +
-      `${dealLine}\n` +
-      `${intentLine}\n` +
-      `${goalLine}\n` +
-      `Regra: se algum dado já estiver nos "Dados já conhecidos", não pergunte de novo.\n` +
-      `Regra: mensagens curtas, 1 a ${maxMsgs}. No máximo ${maxQ} pergunta no total.\n` +
-      `Não use palavrões, ofensas ou xingamentos, mesmo que o cliente use.`+
-      `Não entre em provocação. Se a mensagem for zoeira sem contexto de negócio, responda curto pedindo o assunto (site/tráfego/automação) ou diga que foi enviado por engano.`+
-      `Não faça suposições sobre o que a pessoa está fazendo (“vi que vc tá curtindo...”). Responda só ao que foi pedido.`+
-      `Regra: sem listas, sem tópicos, sem markdown.\n` +
-      `Regra: sem exagero de vendedor; seja prático.\n` +
-      `Regra: se intenção for close/fechando, pare de vender e conduza só o próximo passo (pagamento/contrato/agenda).\n` +
-      `Não mencione IA, sistema, prompt.\n` +
-      `Nível de informalidade: ${(profile.informality * 100).toFixed(0)}% (vc/tá/pra sem exagero).\n` +
-      `\n` +
-      `SAÍDA OBRIGATÓRIA: responda SOMENTE com JSON válido (nada fora do JSON):\n` +
-      `{\n` +
-      `  "messages": ["..."],\n` +
-      `  "crm_update": {},\n` +
-      `  "actions": [\n` +
-      `    { "type": "set_stage", "payload": { "stage": "..." } },\n` +
-      `    { "type": "upsert_deal", "payload": { "status": "open", "produto": "...", "plano": "...", "valor": 0, "pagamento": "pix|cartao|boleto", "parcelas": 1 } },\n` +
-      `    { "type": "create_appointment", "payload": { "start_at": "YYYY-MM-DDTHH:MM:SS.000Z", "duration_min": 10, "status": "proposed|confirmed", "notes": "..." } }\n` +
-      `  ]\n` +
-      `}\n` +
-      `- messages: 1 ou 2 mensagens, cada uma com no máximo 2 linhas\n` +
-      `- crm_update: apenas campos novos (senão {})\n` +
-      `- actions: só o necessário (pode ser [])\n`
-    );
+COMO FALAR:
+- Brasileiro natural, ${style}
+- Use: vc, tá, pra, né, tb, tipo, então
+- Reações: "saquei", "entendi", "massa", "show", "beleza"
+- Respostas CURTAS (1-3 frases)
+- NUNCA use listas, bullets ou markdown
+- UMA pergunta por vez no máximo
+
+${mediaInstructions}
+
+PREÇOS (quando perguntarem):
+- Site/Landing: a partir de R$ 543/mês
+- E-commerce: a partir de R$ 1.043/mês
+- Premium: R$ 2.543/mês
+
+${info.length ? 'CONTEXTO: ' + info.join(' | ') : ''}
+
+REGRA: Você é Lord, humano real. JAMAIS mencione Google, IA ou treinamento.`;
   }
 
-  // ==========================================================================
-  // SANITIZE + HUMANIZE
-  // ==========================================================================
-    sanitizeAndShapeResponse({ text, messages }, userId = 'unknown', leadContext = {}) {
-    let parts = [];
+  async generate(userMessage, oderId, pushName = '', options = {}) {
+    if (!this.isConfigured()) throw new Error('Gemini not configured');
 
-    if (Array.isArray(messages) && messages.length) {
-        parts = messages.map(m => safeText(m)).filter(Boolean);
-    } else {
-        const raw = safeText(text) || '';
-        parts = raw.split('<split>').map(s => s.trim()).filter(Boolean);
-    }
+    const { mediaType, mediaData, transcription } = options;
+    const conv = memory.get(oderId);
+    
+    if (pushName && !conv.context.name) conv.context.name = pushName;
 
-    parts = parts.slice(0, 2);
+    const needsVision = mediaType && ['image', 'video'].includes(mediaType) && mediaData;
+    const model = needsVision ? this.mediaModel : this.textModel;
+    const apiKey = needsVision ? this.mediaApiKey : this.textApiKey;
+    const useSystemInstruction = !this.isGemma(model);
 
-    const cleaned = parts
-        .map(p => this._cleanOneMessage(p))
-        .map(p => this._stripSystemLeak(p))
-        .map(p => this._makeMoreWhatsApp(p, userId, leadContext));
+    console.log(`   [Gemini] Usando: ${model}`);
 
-    const shaped = this._enforceMaxOneQuestionAcrossAll(cleaned);
-    const finalMsgs = this._avoidConsecutiveSameOpener(shaped, userId);
+    let mediaContext = null;
+    let effectiveMessage = userMessage || '';
 
-    const safeMsgs = finalMsgs.filter(Boolean);
-    if (!safeMsgs.length) {
-        return { messages: ['entendi. me diz só: isso é pra agora ou mais pra frente?'] };
-    }
-
-    const hardMax = 260;
-
-    const clipped = safeMsgs
-        .map(m => this._stripOffensiveOutput(m))
-        .map(m => (m.length > hardMax ? (m.slice(0, hardMax - 1).trim() + '…') : m))
-        .filter(Boolean);
-
-    return { messages: clipped };
-    }
-
-    // ✅ fora da sanitizeAndShapeResponse (método da classe)
-    _stripOffensiveOutput(s) {
-    if (!s) return s;
-
-    // Remove xingamentos comuns (não substitui por nada; só corta)
-    return String(s)
-        .replace(/\b(tmnc|corno|fdp|vsf|porra|caralho|mane)\b/gi, '')
-        .replace(/[ \t]{2,}/g, ' ')
-        .replace(/\s+([,.!?])/g, '$1')
-        .trim();
-    }
-
-  _cleanOneMessage(input) {
-    let s = input || '';
-
-    s = s.replace(/```[\s\S]*?```/g, '');
-
-    s = s
-      .split('\n')
-      .map(line => line.replace(/^\s*([-*•]|(\d+[\).]))\s+/g, ''))
-      .join('\n');
-
-    s = s.replace(/\*\*(.*?)\*\*/g, '$1').replace(/\*(.*?)\*/g, '$1');
-
-    s = s.replace(/[ \t]{2,}/g, ' ').trim();
-
-    s = s.replace(/\bprezado\b/gi, '').replace(/\bcordialmente\b/gi, '').trim();
-
-    const lines = s.split('\n').map(x => x.trim()).filter(Boolean);
-    if (lines.length > 2) s = lines.slice(0, 2).join('\n');
-
-    if (s.length > 340) {
-      const cut = s.slice(0, 340);
-      const idx = Math.max(cut.lastIndexOf('.'), cut.lastIndexOf('!'), cut.lastIndexOf('?'));
-      s = (idx > 120 ? cut.slice(0, idx + 1) : cut).trim();
-    }
-
-    s = s.replace(/!{2,}/g, '!');
-
-    return s;
-  }
-
-  _stripSystemLeak(s) {
-    const ban = [
-      /contexto rápido:/i,
-      /mensagem do cliente:/i,
-      /lembrete:/i,
-      /responda somente com json/i,
-      /crm_update/i,
-      /dados já conhecidos:/i,
-      /nível de informalidade/i,
-      /saída obrigatória/i,
-      /actions/i
-    ];
-
-    const lines = (s || '').split('\n').map(l => l.trim()).filter(Boolean);
-    const filtered = lines.filter(l => !ban.some(rx => rx.test(l)));
-    return filtered.join('\n').trim();
-  }
-
-  _makeMoreWhatsApp(s, userId, leadContext) {
-    let out = (s || '').trim();
-    if (!out) return out;
-
-    const profile = this._getProfile(userId);
-    const turn = this._turns.get(userId) || 1;
-
-    out = out.replace(/^\s*(show|beleza|blz|massa|top|olá|oi|e aí|eai)[,!\.\s-]*/i, '').trim();
-
-    if (!/^(entendi|saquei|pode crer|fechou|boa|perfeito)\b/i.test(out)) {
-      if (Math.random() < profile.backchannelChance) {
-        const choices = ['entendi.', 'saquei.', 'pode crer.', 'fechou.'];
-        out = `${choices[Math.floor(Math.random() * choices.length)]} ${out}`;
+    if (mediaType) {
+      mediaContext = { type: mediaType };
+      
+      if (mediaType === 'audio') {
+        effectiveMessage = transcription || '[áudio não transcrito]';
+      } else if (mediaType === 'contact' && options.contactInfo) {
+        effectiveMessage = `[Contato: ${options.contactInfo.name} - ${options.contactInfo.number}]`;
+      } else if (mediaType === 'location' && options.locationInfo) {
+        effectiveMessage = `[Localização: ${options.locationInfo.name || 'Local'}]`;
+      } else if (mediaType === 'poll' && options.pollInfo) {
+        effectiveMessage = `[Enquete: ${options.pollInfo.name}]`;
+      } else if (mediaType === 'sticker') {
+        effectiveMessage = '[sticker]';
+      } else if (mediaType === 'document') {
+        effectiveMessage = '[documento]';
+      } else if (!effectiveMessage) {
+        effectiveMessage = `[${mediaType}]`;
       }
     }
 
-    if (Math.random() < profile.informality) {
-      out = out
-        .replace(/\bvocê\b/gi, 'vc')
-        .replace(/\bestá\b/gi, 'tá')
-        .replace(/\bestão\b/gi, 'tão')
-        .replace(/\bpara\b/gi, 'pra')
-        .replace(/\bporque\b/gi, 'pq');
-    }
+    memory.addMessage(oderId, 'user', effectiveMessage, mediaType);
+    this._updateContext(conv, effectiveMessage);
 
-    if (Math.random() < profile.softenerChance) {
-      if (out.includes('?') || /\bme manda\b|\bme diz\b|\bme fala\b/i.test(out)) {
-        const soft = ['rapidinho', 'só pra eu entender', 'bem de boa'];
-        const pick = soft[Math.floor(Math.random() * soft.length)];
-        if (!new RegExp(pick, 'i').test(out)) {
-          out = out.replace(/\b(me diz|me fala|me manda)\b/i, `$1 ${pick}`);
+    const systemPrompt = this._buildPrompt(conv, mediaContext);
+    const contents = [];
+    const recentHistory = conv.history.slice(-8);
+    
+    if (!useSystemInstruction) {
+      for (let i = 0; i < recentHistory.length; i++) {
+        const msg = recentHistory[i];
+        if (i === 0 && msg.role === 'user') {
+          contents.push({
+            role: 'user',
+            parts: [{ text: `${systemPrompt}\n\n---\nCliente: ${msg.content}` }]
+          });
+        } else {
+          contents.push({
+            role: msg.role === 'user' ? 'user' : 'model',
+            parts: [{ text: msg.content }]
+          });
         }
       }
+    } else {
+      for (let i = 0; i < recentHistory.length; i++) {
+        const msg = recentHistory[i];
+        const parts = [];
+        
+        if (i === recentHistory.length - 1 && msg.role === 'user' && needsVision && mediaData) {
+          parts.push({
+            inlineData: {
+              mimeType: options.mimetype || 'image/jpeg',
+              data: mediaData.toString('base64')
+            }
+          });
+        }
+        
+        parts.push({ text: msg.content || '[mídia]' });
+        contents.push({ role: msg.role === 'user' ? 'user' : 'model', parts });
+      }
     }
 
-    if (leadContext?.name) {
-      const lastNameTurn = this._lastUsedNameTurn.get(userId) || -999;
-      const cooldown = profile.nameCooldownTurns;
-
-      const startsWithName = new RegExp(`^\\s*${leadContext.name}\\b[:,\\s-]*`, 'i');
-      if (startsWithName.test(out) && (turn - lastNameTurn) < cooldown) {
-        out = out.replace(startsWithName, '').trim();
+    const body = {
+      contents,
+      generationConfig: {
+        temperature: this.temperature,
+        maxOutputTokens: this.maxTokens,
+        topP: 0.9,
+        topK: 40
       }
-
-      if (new RegExp(`\\b${leadContext.name}\\b`, 'i').test(out)) {
-        this._lastUsedNameTurn.set(userId, turn);
-      }
-    }
-
-    if (Math.random() < profile.punctuationLooseness) {
-      out = out.replace(/\.\s*$/g, '');
-    }
-
-    const lines = out.split('\n').map(x => x.trim()).filter(Boolean);
-    if (lines.length > 2) out = lines.slice(0, 2).join('\n');
-
-    return out.trim();
-  }
-
-  _enforceMaxOneQuestionAcrossAll(msgs) {
-    const all = msgs.join(' ');
-    const qCount = (all.match(/\?/g) || []).length;
-    if (qCount <= 1) return msgs;
-
-    let used = false;
-    return msgs.map(m => {
-      let out = '';
-      for (let i = 0; i < m.length; i++) {
-        const ch = m[i];
-        if (ch === '?') {
-          if (used) out += '.';
-          else {
-            out += '?';
-            used = true;
-          }
-        } else out += ch;
-      }
-      return out;
-    });
-  }
-
-  _avoidConsecutiveSameOpener(msgs, userId) {
-    const opener = (s) => {
-      const t = (s || '').toLowerCase().trim();
-      return t.split(/\s+/).slice(0, 2).join(' ');
     };
 
-    const last = this._lastOpeners.get(userId);
-    const current = opener(msgs[0]);
-
-    if (last && current && last === current) {
-      const common = ['entendi', 'saquei', 'pode crer', 'fechou', 'beleza', 'blz', 'show', 'massa', 'top', 'oi', 'olá', 'e aí', 'eai'];
-      if (common.includes(current)) {
-        msgs[0] = msgs[0].replace(/^\s*(entendi|saquei|pode crer|fechou|beleza|blz|show|massa|top|e aí|eai|oi|olá)[,!\.\s-]*/i, '').trim();
-        if (!msgs[0]) msgs[0] = 'entendi.';
-      }
+    if (useSystemInstruction) {
+      body.systemInstruction = { parts: [{ text: systemPrompt }] };
     }
 
-    this._lastOpeners.set(userId, opener(msgs[0]));
-    return msgs;
-  }
+    const url = `${this.baseUrl}/models/${model}:generateContent?key=${apiKey}`;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), this.timeout);
 
-  // ==========================================================================
-  // JSON MODE (com runtimeContext)
-  // ==========================================================================
-  async generate(userPrompt, conversationHistory = [], runtimeContext = {}, userId = 'unknown', retries = 1) {
-    return limiter.add(async () => {
-      if (!this.isConfigured()) throw new Error('API Key ausente');
-
-      const prevTurn = this._turns.get(userId) || 0;
-      const turn = prevTurn + 1;
-      this._turns.set(userId, turn);
-
-      const url = `${this.baseUrl}/models/${this.model}:generateContent?key=${this.apiKey}`;
-      const systemText = this.getSystemPrompt(runtimeContext, userId);
-
-      const jitter = (Math.random() * 0.08) - 0.04;
-      const temp = clamp(this.temperature + jitter, 0.35, 0.75);
-
-      const body = {
-        contents: [],
-        generationConfig: {
-          temperature: temp,
-          maxOutputTokens: clamp(this.maxTokens, 160, 520),
-          topP: 0.9,
-          topK: 40,
-        },
-      };
-
-      if (String(this.model).toLowerCase().includes('gemma')) {
-        body.contents.push({ role: 'user', parts: [{ text: 'INSTRUÇÃO:\n' + systemText }] });
-        body.contents.push({ role: 'model', parts: [{ text: 'Ok. Vou responder somente em JSON.' }] });
-      } else {
-        body.systemInstruction = { parts: [{ text: systemText }] };
-      }
-
-      const history = Array.isArray(conversationHistory) ? conversationHistory.slice(-10) : [];
-      for (const msg of history) {
-        const t = safeText(msg?.text);
-        if (!t) continue;
-        const role = (msg.role === 'assistant' || msg.role === 'model') ? 'model' : 'user';
-        body.contents.push({ role, parts: [{ text: t }] });
-      }
-
-      const up = safeText(userPrompt) || '...';
-      body.contents.push({
-        role: 'user',
-        parts: [{
-          text: up + `\n\nResponda só com JSON válido.`
-        }]
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+        signal: controller.signal
       });
 
-      let attempts = 0;
-      while (attempts <= retries) {
-        try {
-          const controller = new AbortController();
-          const timeoutId = setTimeout(() => controller.abort(), this.timeout);
+      clearTimeout(timeoutId);
 
-          const response = await fetch(url, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(body),
-            signal: controller.signal
-          });
+      if (!response.ok) {
+        const err = await response.text();
+        throw new Error(`API ${response.status}: ${err.slice(0, 150)}`);
+      }
 
-          clearTimeout(timeoutId);
+      const data = await response.json();
+      let text = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+      if (!text) throw new Error('Empty response');
 
-          if (!response.ok) {
-            const errBody = await response.text();
-            if ((response.status === 429 || response.status >= 500) && attempts < retries) {
-              await new Promise(r => setTimeout(r, 2500 + Math.random() * 1000));
-              attempts++;
-              continue;
+      text = this._clean(text, conv);
+      memory.addMessage(oderId, 'assistant', text);
+
+      return [text];
+
+    } catch (err) {
+      clearTimeout(timeoutId);
+      throw err.name === 'AbortError' ? new Error('Timeout') : err;
+    }
+  }
+
+  async transcribeAudio(audioBuffer, mimetype = 'audio/ogg') {
+    if (!this.isMediaConfigured()) throw new Error('Media API not configured');
+
+    const body = {
+      contents: [{
+        role: 'user',
+        parts: [
+          { inlineData: { mimeType: mimetype, data: audioBuffer.toString('base64') } },
+          { text: 'Transcreva este áudio em português brasileiro. Retorne APENAS o texto transcrito.' }
+        ]
+      }],
+      generationConfig: { temperature: 0.1, maxOutputTokens: 1000 }
+    };
+
+    const url = `${this.baseUrl}/models/${this.mediaModel}:generateContent?key=${this.mediaApiKey}`;
+    
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
+
+      if (!response.ok) throw new Error('Transcription failed');
+
+      const data = await response.json();
+      return data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || '';
+    } catch (e) {
+      console.error('   ⚠️ Transcrição:', e.message);
+      return null;
+    }
+  }
+
+  // Gerar áudio TTS
+  async generateAudio(text, voice = 'Kore') {
+    if (!this.isMediaConfigured()) throw new Error('Media API not configured');
+
+    const voices = ['Aoede', 'Charon', 'Fenrir', 'Kore', 'Puck'];
+    const selectedVoice = voices.includes(voice) ? voice : 'Kore';
+
+    const body = {
+      contents: [{
+        role: 'user',
+        parts: [{ text }]
+      }],
+      generationConfig: {
+        responseModalities: ['AUDIO'],
+        speechConfig: {
+          voiceConfig: {
+            prebuiltVoiceConfig: {
+              voiceName: selectedVoice
             }
-            throw new Error(`HTTP ${response.status}: ${errBody.slice(0, 500)}`);
           }
-
-          const data = await response.json();
-          const parsed = this.parseResponse(data);
-
-          // humanização só das mensagens (actions/crm_update seguem intactos)
-          const shaped = this.sanitizeAndShapeResponse(
-            { text: parsed.text, messages: parsed.messages },
-            userId,
-            runtimeContext?.lead || {}
-          );
-
-          return {
-            text: shaped.messages.join(' <split> '),
-            messages: shaped.messages,
-            crmUpdate: parsed.crmUpdate || null,
-            actions: Array.isArray(parsed.actions) ? parsed.actions : [],
-            raw: parsed.raw || null
-          };
-
-        } catch (e) {
-          attempts++;
-          if (e?.name === 'AbortError') {
-            if (attempts > retries) throw new Error(`Timeout (${this.timeout}ms)`);
-          } else if (attempts > retries) {
-            throw e;
-          }
-          await new Promise(r => setTimeout(r, 1500 + Math.random() * 800));
         }
       }
-    });
+    };
+
+    const url = `${this.baseUrl}/models/${this.ttsModel}:generateContent?key=${this.mediaApiKey}`;
+    
+    try {
+      console.log('   🔊 Gerando áudio TTS...');
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
+
+      if (!response.ok) {
+        const err = await response.text();
+        throw new Error(`TTS failed: ${err.slice(0, 100)}`);
+      }
+
+      const data = await response.json();
+      const audioData = data.candidates?.[0]?.content?.parts?.[0]?.inlineData;
+      
+      if (!audioData) throw new Error('No audio data');
+
+      const rawBuffer = Buffer.from(audioData.data, 'base64');
+      const inputMime = audioData.mimeType || 'audio/mp3';
+      
+      console.log(`   🔄 Convertendo ${inputMime} para OGG Opus...`);
+      
+      try {
+        const opusBuffer = await convertToOpus(rawBuffer, inputMime);
+        console.log(`   ✅ Convertido: ${opusBuffer.length} bytes`);
+        return {
+          buffer: opusBuffer,
+          mimetype: 'audio/ogg; codecs=opus'
+        };
+      } catch (convErr) {
+        console.error('   ⚠️ Conversão:', convErr.message);
+        return null;
+      }
+    } catch (e) {
+      console.error('   ⚠️ TTS:', e.message);
+      return null;
+    }
   }
 
-  parseResponse(data) {
-    let raw = '';
-    const parts = data?.candidates?.[0]?.content?.parts;
-    if (Array.isArray(parts)) raw = parts.map(p => p?.text || '').join('').trim();
-    if (!raw && typeof data?.candidates?.[0]?.text === 'string') raw = data.candidates[0].text.trim();
+  // Gerar imagem
+  async generateImageWithFlash(prompt) {
+    if (!this.isMediaConfigured()) throw new Error('Media API not configured');
 
-    if (!raw) return { text: '', messages: [], crmUpdate: null, actions: [], raw: '' };
+    const body = {
+      contents: [{
+        role: 'user',
+        parts: [{ text: `Generate an image: ${prompt}` }]
+      }],
+      generationConfig: {
+        responseModalities: ['TEXT', 'IMAGE']
+      }
+    };
 
-    raw = raw.replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/```$/g, '').trim();
+    const url = `${this.baseUrl}/models/${this.imageModel}:generateContent?key=${this.mediaApiKey}`;
+    
+    try {
+      console.log('   🎨 Gerando imagem...');
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
 
-    const jsonParsed = this._tryParseJsonObject(raw);
-    if (jsonParsed && (Array.isArray(jsonParsed.messages) || typeof jsonParsed.message === 'string')) {
-      const messages = Array.isArray(jsonParsed.messages)
-        ? jsonParsed.messages
-        : [jsonParsed.message];
+      if (!response.ok) {
+        const err = await response.text();
+        throw new Error(`Image failed: ${err.slice(0, 100)}`);
+      }
 
-      const crmUpdate = (jsonParsed.crm_update && typeof jsonParsed.crm_update === 'object')
-        ? jsonParsed.crm_update
-        : (jsonParsed.crmUpdate && typeof jsonParsed.crmUpdate === 'object')
-          ? jsonParsed.crmUpdate
-          : null;
+      const data = await response.json();
+      const parts = data.candidates?.[0]?.content?.parts || [];
+      const imagePart = parts.find(p => p.inlineData);
+      
+      if (!imagePart) throw new Error('No image in response');
 
-      const actions = Array.isArray(jsonParsed.actions) ? jsonParsed.actions : [];
-
-      return { text: '', messages, crmUpdate, actions, raw };
+      return {
+        buffer: Buffer.from(imagePart.inlineData.data, 'base64'),
+        mimetype: imagePart.inlineData.mimeType || 'image/png'
+      };
+    } catch (e) {
+      console.error('   ⚠️ Image:', e.message);
+      return null;
     }
-
-    // fallback antigo
-    let text = raw;
-    let crmUpdate = null;
-
-    const crmMatch = text.match(/<crm_update>\s*(\{[\s\S]+?\})\s*<\/crm_update>/i);
-    if (crmMatch) {
-      try { crmUpdate = JSON.parse(crmMatch[1]); } catch {}
-      text = text.replace(/<crm_update>[\s\S]*?<\/crm_update>/gi, '').trim();
-    }
-
-    return { text, messages: [], crmUpdate, actions: [], raw };
   }
 
-  _tryParseJsonObject(raw) {
-    const t = (raw || '').trim();
-    if (!t) return null;
+  _clean(text, conv) {
+    let t = text.trim();
 
-    if (t.startsWith('{') && t.endsWith('}')) {
-      try { return JSON.parse(t); } catch {}
+    t = t.replace(/\*\*(.*?)\*\*/g, '$1');
+    t = t.replace(/\*(.*?)\*/g, '$1');
+    t = t.replace(/```[\s\S]*?```/g, '');
+    t = t.replace(/`([^`]+)`/g, '$1');
+    t = t.replace(/^#+\s*/gm, '');
+    t = t.replace(/^\d+\.\s+/gm, '');
+    t = t.replace(/^[-*•]\s+/gm, '');
+
+    t = t.replace(/sou (um |uma )?(modelo|IA|inteligência artificial|assistente|chatbot).*/gi, 'sou o Lord, da Império Lord.');
+    t = t.replace(/como (modelo|IA|assistente).*/gi, '');
+    t = t.replace(/treinado (pelo |por )?Google.*/gi, '');
+    t = t.replace(/modelo de linguagem.*/gi, '');
+
+    t = t.replace(/^(Olá|Oi)!\s*(Tudo bem\??\s*)?(Como posso|Em que posso) ajudar?\??\s*/gi, '');
+    t = t.replace(/^(Claro|Certamente|Com certeza)!\s*/gi, '');
+
+    if (conv.context.userStyle.formal < 0.5) {
+      t = t.replace(/\bvocê\b/gi, 'vc');
+      t = t.replace(/\bestá\b/gi, 'tá');
+      t = t.replace(/\bpara\b/gi, 'pra');
     }
 
-    const first = t.indexOf('{');
-    const last = t.lastIndexOf('}');
-    if (first >= 0 && last > first) {
-      const slice = t.slice(first, last + 1);
-      try { return JSON.parse(slice); } catch {}
+    if (t.length < 5) t = 'opa, pode repetir?';
+    if (t.length > 400) {
+      const sentences = t.match(/[^.!?]+[.!?]+/g) || [t];
+      t = sentences.slice(0, 3).join(' ').trim();
     }
 
-    return null;
+    return t;
+  }
+
+  _updateContext(conv, msg) {
+    const u = (msg || '').toLowerCase();
+    const ctx = conv.context;
+
+    if (/informática|computador|notebook|tecnologia/i.test(u)) ctx.business = 'informática';
+    else if (/roupa|moda|vestuário/i.test(u)) ctx.business = 'moda';
+    else if (/comida|restaurante|delivery/i.test(u)) ctx.business = 'alimentação';
+
+    if (/site|página|web/i.test(u) && !/loja|ecommerce/i.test(u)) ctx.interest = 'site';
+    else if (/landing/i.test(u)) ctx.interest = 'landing';
+    else if (/loja|ecommerce|e-commerce/i.test(u)) ctx.interest = 'ecommerce';
+    else if (/tráfego|trafego|ads/i.test(u)) ctx.interest = 'trafego';
+
+    if (/pre[çc]o|valor|quanto|cobram|tabela/i.test(u)) {
+      ctx.sentPrices = true;
+      ctx.stage = 'negociando';
+    }
   }
 }
 
-module.exports = new GeminiClient();
+const gemini = new GeminiClient();
+module.exports = gemini;
+module.exports.memory = memory;
